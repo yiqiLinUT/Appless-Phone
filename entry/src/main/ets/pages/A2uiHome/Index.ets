@@ -19,9 +19,31 @@ import {
 import { isRollingGoHotelBookingUrl } from '@loop/agent-core';
 import {
   advanceWaterfallFeed,
+  applyWaterfallExpandedQuery,
   applyWaterfallSourceSelection,
+  callConfiguredAggregateSearchContinuation,
+  callConfiguredWaterfallInterestRecall,
+  AggregateSearchSourceBatch,
+  AggregateSearchSource,
+  configureWaterfallEnabledSourcesForRuntime,
+  configureWaterfallPreferenceProfileForRuntime,
+  failWaterfallExpansion,
+  mergeAggregateSearchContinuationBatch,
+  mergeWaterfallBatch,
   mergeWaterfallFeedSnapshot,
-  WaterfallFeedState
+  planWaterfallInterestRecall,
+  planWaterfallContinuation,
+  parseWaterfallExpandedQuery,
+  WaterfallFeedState,
+  WaterfallFeedUpdate,
+  WaterfallInterestRecallBatch,
+  WaterfallLoadRequest,
+  WaterfallPreferenceWeight,
+  WaterfallQueryExpansionRequest,
+  WaterfallRankedCandidate,
+  WaterfallSourcePhase,
+  WaterfallSourceState,
+  waterfallExpansionPrompt
 } from '@loop/agent-core';
 import router from '@ohos.router';
 import { abilityAccessCtrl, bundleManager, common, Permissions } from '@kit.AbilityKit';
@@ -30,6 +52,7 @@ import { preferences } from '@kit.ArkData';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { formBindingData, formProvider } from '@kit.FormKit';
 import { notificationManager } from '@kit.NotificationKit';
+import { mapCommon, petalMaps } from '@kit.MapKit';
 import promptAction from '@ohos.promptAction';
 import fs from '@ohos.file.fs';
 import { geoLocationManager } from '@kit.LocationKit';
@@ -72,6 +95,7 @@ import {
   SocialHubPlatform
 } from '@loop/agent-core';
 import { aiLogError, aiLogInfo } from '@loop/agent-core';
+import { sha256Digest } from '@loop/agent-core';
 import {
   appendMultiTaskSlot,
   callToolGateway,
@@ -98,6 +122,7 @@ import {
   prepareGoogleOAuthAuthorizationUrl,
   recheck12306TrainAvailability,
   resolveMultiTaskSlotId,
+  rideDidiMcpSandboxEnabledForRuntime,
   select12306DebugTrain,
   sendLocalSocialHubReply,
   shortComposioUserId,
@@ -135,7 +160,10 @@ import {
 } from '../../model/PersonaA2ui';
 import { DEEP_SEARCH_ROUTE_URL, DeepSearchRouteParams } from './deepsearch/DeepSearchEngine';
 import {
+  isStableWaterfallContentPreference,
   mergePersonaStablePreference,
+  waterfallExplicitPreferencesFromMemory,
+  waterfallExplicitPreferencesFromStatement,
   PersonaMemoryUpdateRequest
 } from '../../model/PersonaMemoryUpdate';
 import { PreferencesPersonaPackStore } from '../../model/PersonaPreferencesStore';
@@ -150,6 +178,7 @@ import {
 } from './components/BimHomePage';
 import { ComposioAuthPage } from './components/ComposioAuthPage';
 import { BimRememberState, HomePage } from './components/HomePage';
+import { HtmlHomeSurfaceView } from './components/HtmlHomeSurfaceView';
 import {
   cancelScheduledTrainPresaleTask,
   emptyTrainPresaleTrip,
@@ -172,6 +201,22 @@ import {
   isAllowed12306BookingUrl
 } from './components/CheckoutWebOverlay';
 import { ConfigPage } from './components/ConfigPage';
+import { PublicPersonaPage } from './components/PublicPersonaPage';
+import { PublicPersonaClient } from '../../publicpersona/PublicPersonaClient';
+import {
+  PublicPersonaCandidate,
+  PublicPersonaPhase,
+  PublicPersonaProgress,
+  PublicPersonaSearchMode,
+  PublicPersonaSnapshot,
+  parsePublicPersonaMarkdown,
+  replacePublicPersonaMbti,
+  sanitizePublicPersonaSnapshot
+} from '../../publicpersona/PublicPersonaModel';
+import {
+  PUBLIC_PERSONA_STORE_NAME,
+  PublicPersonaStore
+} from '../../publicpersona/PublicPersonaStore';
 import {
   HotelTurnStatus
 } from './agent/MultiAgentHotelSupport';
@@ -195,6 +240,15 @@ import {
   BimStore,
   BIM_STORE_NAME
 } from './bim/BimStore';
+import {
+  emptyWaterfallPreferenceProfile,
+  updateWaterfallPreferenceWeight,
+  waterfallBehaviorDelta,
+  WaterfallBehaviorEvidence,
+  WaterfallPreferenceProfile,
+  WaterfallPreferencesStore,
+  WATERFALL_PREFERENCES_STORE_NAME
+} from './waterfall/WaterfallPreferencesStore';
 import {
   BimAttentionEvent,
   BimCuratorResult,
@@ -220,7 +274,10 @@ import {
   queueBimSentinelMockHandoff,
   shouldScheduleBimDailyReminder
 } from './bim/BimDailyReminder';
-import { SystemUriOpener } from './agent/AiphoneRegisteredActionExecutor';
+import {
+  SystemUriOpener,
+  validateRegisteredPageActionArgs
+} from './agent/AiphoneRegisteredActionExecutor';
 import {
   RegisteredPageSnapshot,
   RegisteredPageSnapshotStore,
@@ -238,12 +295,19 @@ import { createHtmlHomeDocument } from './html/HtmlHomeSnapshot';
 import { buildMultiTaskHomePayload, renderHtmlHomeDocument } from './html/HtmlHomeRenderer';
 import {
   buildWaterfallHomePayload,
+  renderAggregateSearchHomeDocument,
   waterfallAdvanceCurrentFromAction,
+  waterfallBehaviorFromAction,
   waterfallEnabledSourcesFromAction
 } from './html/HtmlAggregateSearchHomeRenderer';
 import { createFirecrawlPendingDocument, isFirecrawlToolId } from './html/HtmlFirecrawlHomeRenderer';
 import { isHtmlHomeActionAllowed } from './html/HtmlHomeActionPolicy';
-import { HtmlHomeAction, HtmlHomeBlock, HtmlHomeDocument } from './html/HtmlHomeTypes';
+import {
+  HtmlHomeAction,
+  HtmlHomeBlock,
+  HtmlHomeDocument,
+  WaterfallBehaviorActionArgs
+} from './html/HtmlHomeTypes';
 import {
   ensureReminderNotificationEnabled,
   SystemOneShotScheduler
@@ -290,8 +354,39 @@ import {
   A2uiHomeResolvedToolRequest,
   directPaymentToolIdForActionId,
   directRideToolIdForActionId,
+  resolveA2uiHomeSubmitToolRequest,
   resolveA2uiHomeToolRequest
 } from './render/A2uiHomeToolRequest';
+import {
+  createDailyBriefErrorSurface,
+  createDailyBriefLoadingSurface,
+  createDailyBriefSurface,
+  createDailyBriefWaterfallSurface,
+  DailyBriefMailReadRequest,
+  dailyBriefDate,
+  dailyBriefDemoScenario,
+  dailyBriefHistoryDirection,
+  dailyBriefMailReadRequest,
+  dailyBriefScenarioToolRequest,
+  decideDailyBriefOpen,
+  selectDailyBriefStoredWinnerBeforeSave,
+  selectDailyBriefSnapshotAfterSave,
+  shouldApplyDailyBriefGeneration
+} from './dailybrief/DailyBriefCore';
+import { generateDailyBrief } from './dailybrief/DailyBriefGenerator';
+import {
+  scheduleNextDailyBrief,
+  shouldStartDailyBriefCatchUp,
+  transitionDailyBriefCatchUp
+} from './dailybrief/DailyBriefScheduler';
+import {
+  DailyBriefStore,
+  isValidDailyBriefAction
+} from './dailybrief/DailyBriefStore';
+import {
+  DailyBriefPreference,
+  DailyBriefSnapshot
+} from './dailybrief/DailyBriefTypes';
 import {
   A2UI_MOTION_MOVE_CURVE,
   A2UI_MOTION_NORMAL_MS
@@ -712,7 +807,7 @@ struct Index {
   @State ignoreToolSurfaceUpdates: boolean = false;
   @State htmlHomeDebugExportEnabled: boolean = false;
   @State htmlHomeDebugExportPath: string = '';
-  @State didiMcpSandboxEnabled: boolean = true;
+  @State didiMcpSandboxEnabled: boolean = rideDidiMcpSandboxEnabledForRuntime();
   @State isBusy: boolean = false;
   @State connectionStatus: string = initialConnectionState.connectionStatus;
   @State connectionMessage: string = initialConnectionState.connectionMessage;
@@ -772,6 +867,16 @@ struct Index {
   @State composioAuthItems: ComposioAuthConfigItem[] = [];
   @State composioAuthMessage: string = '';
   @State composioAuthBusy: boolean = false;
+  @State showPublicPersonaPage: boolean = false;
+  @State publicPersonaPhase: PublicPersonaPhase = 'input';
+  @State publicPersonaCandidates: PublicPersonaCandidate[] = [];
+  @State publicPersonaProgress: PublicPersonaProgress | null = null;
+  @State publicPersonaSnapshot: PublicPersonaSnapshot | null = null;
+  @State publicPersonaRenderTick: number = 0;
+  @State publicPersonaError: string = '';
+  private publicPersonaJobId: number = 0;
+  private publicPersonaInitialized: boolean = false;
+  private readonly publicPersonaClient: PublicPersonaClient = new PublicPersonaClient();
   @State mailDetailEventJson: string = '';
   @State mailReplyEventJson: string = '';
   @State mailCalendarEventJson: string = '';
@@ -787,10 +892,25 @@ struct Index {
   @State multiTaskPayloadTick: number = 0;
   @State waterfallPayloadJson: string = '';
   @State waterfallPayloadTick: number = 0;
+  @State interestWaterfallHtml: string = '';
+  @State interestWaterfallPayloadJson: string = '';
+  @State interestWaterfallPayloadTick: number = 0;
   private waterfallShellHtml: string = '';
   private waterfallShellSurfaceId: string = '';
   private waterfallFeedState: WaterfallFeedState | null = null;
   private waterfallFeedSurfaceId: string = '';
+  private dailyBriefSnapshot: DailyBriefSnapshot | null = null;
+  private dailyBriefGeneration: number = 0;
+  private dailyBriefCatchUpPending: boolean = false;
+  private waterfallContinuationBatchIndex: number = 100;
+  private interestWaterfallFeedState: WaterfallFeedState | null = null;
+  private interestRecallStarted: boolean = false;
+  private waterfallPreferencesStoreInstance: WaterfallPreferencesStore | null = null;
+  private waterfallPreferenceProfile: WaterfallPreferenceProfile = emptyWaterfallPreferenceProfile();
+  private waterfallSessionTopicWeights: WaterfallPreferenceWeight[] = [];
+  private waterfallSessionSourceWeights: WaterfallPreferenceWeight[] = [];
+  private waterfallSessionFormatWeights: WaterfallPreferenceWeight[] = [];
+  private waterfallSessionEvidence: WaterfallBehaviorEvidence[] = [];
   private multiTaskActiveSectionId: string = '';
   private multiTaskUserPinnedSection: boolean = false;
   private multiTaskLastMergedRawBySlot: Record<string, string> = {};
@@ -1253,6 +1373,263 @@ struct Index {
     this.waterfallPayloadTick = this.waterfallPayloadTick + 1;
   }
 
+  private interestWaterfallDocument(): HtmlHomeDocument {
+    const current = this.currentHtmlHomeDocument();
+    return {
+      version: 1,
+      surfaceId: 'waterfall-interest-home',
+      source: 'tool',
+      kind: 'aggregate-search',
+      title: '发现流',
+      subtitle: '',
+      chips: [],
+      metrics: [],
+      timeline: [],
+      blocks: [],
+      actions: [],
+      history: [],
+      persona: current.persona,
+      personaMemory: current.personaMemory,
+      rawSurfaceRoot: null,
+      waterfall: this.interestWaterfallFeedState ?? undefined,
+      generatedAt: new Date().toISOString()
+    };
+  }
+
+  private publishInterestWaterfallPayload(): void {
+    const payload = buildWaterfallHomePayload(
+      this.interestWaterfallDocument(), false, this.interestWaterfallFeedState);
+    this.interestWaterfallPayloadJson = payload === null ? '' : JSON.stringify(payload);
+    this.interestWaterfallPayloadTick = this.interestWaterfallPayloadTick + 1;
+  }
+
+  private interestSourceState(result: WaterfallInterestRecallBatch): WaterfallSourceState {
+    let phase: WaterfallSourcePhase = 'error';
+    if (result.batch.status.status === 'success' || result.batch.status.status === 'empty') {
+      phase = 'exhausted';
+    } else if (result.batch.status.status === 'needs_auth') {
+      phase = 'needs_auth';
+    }
+    return {
+      source: result.batch.source,
+      phase,
+      continuation: null,
+      inFlight: false,
+      reservedCount: 0,
+      message: result.batch.status.message
+    };
+  }
+
+  private recentPositiveWaterfallCandidates(): WaterfallRankedCandidate[] {
+    const candidates: WaterfallRankedCandidate[] = [];
+    for (let index = this.waterfallSessionEvidence.length - 1; index >= 0 && candidates.length < 3; index -= 1) {
+      const evidence = this.waterfallSessionEvidence[index];
+      if (evidence.behavior === 'quick_skip' || candidates.some(
+        (candidate: WaterfallRankedCandidate): boolean => candidate.id === evidence.candidateId)) {
+        continue;
+      }
+      const candidate = this.waterfallCandidate(evidence.candidateId, this.waterfallFeedState) ??
+        this.waterfallCandidate(evidence.candidateId, this.interestWaterfallFeedState);
+      if (candidate !== null) candidates.push(candidate);
+    }
+    return candidates;
+  }
+
+  private runInterestRecall(target: 'home' | 'search', document: HtmlHomeDocument | null): void {
+    const state = target === 'home' ? this.interestWaterfallFeedState : this.waterfallFeedState;
+    if (state === null) return;
+    const surfaceId = target === 'search' ? this.waterfallFeedSurfaceId : 'waterfall-interest-home';
+    const requests = planWaterfallInterestRecall(
+      this.currentWaterfallPreferenceProfile(), this.recentPositiveWaterfallCandidates(), state.enabledSources);
+    aiLogInfo('[AIPhone][WaterfallInterestRecallStart] target=' + target +
+      ' requests=' + requests.length.toString());
+    callConfiguredWaterfallInterestRecall(requests, (result: WaterfallInterestRecallBatch): void => {
+      let current = target === 'home' ? this.interestWaterfallFeedState : this.waterfallFeedState;
+      if (current === null || (target === 'search' && this.waterfallFeedSurfaceId !== surfaceId)) return;
+      current = mergeWaterfallBatch(
+        current, result.candidates, this.interestSourceState(result), Date.now(), false).state;
+      if (target === 'home') {
+        this.interestWaterfallFeedState = current;
+        this.publishInterestWaterfallPayload();
+      } else if (document !== null) {
+        this.waterfallFeedState = current;
+        this.publishWaterfallPayload(document);
+      }
+    }).then((): void => {
+      const current = target === 'home' ? this.interestWaterfallFeedState : this.waterfallFeedState;
+      if (current === null || (target === 'search' && this.waterfallFeedSurfaceId !== surfaceId)) return;
+      current.sources.forEach((source: WaterfallSourceState): void => {
+        if (source.inFlight || source.phase === 'loading') {
+          source.phase = 'exhausted';
+          source.inFlight = false;
+          source.continuation = null;
+          source.reservedCount = 0;
+        }
+      });
+      if (target === 'home') {
+        this.publishInterestWaterfallPayload();
+      } else if (document !== null) {
+        this.publishWaterfallPayload(document);
+      }
+      aiLogInfo('[AIPhone][WaterfallInterestRecallReady] target=' + target);
+    }).catch((error: Error): void => {
+      const current = target === 'home' ? this.interestWaterfallFeedState : this.waterfallFeedState;
+      if (current !== null) {
+        current.sources.forEach((source: WaterfallSourceState): void => {
+          if (source.inFlight || source.phase === 'loading') {
+            source.phase = 'error';
+            source.inFlight = false;
+            source.message = '内容补充失败';
+          }
+        });
+        if (target === 'home') this.publishInterestWaterfallPayload();
+        else if (document !== null) this.publishWaterfallPayload(document);
+      }
+      aiLogError('[AIPhone][WaterfallInterestRecallFailed] target=' + target +
+        ' error=' + error.message.substring(0, 240));
+    });
+  }
+
+  private ensureInterestWaterfall(): void {
+    if (this.interestWaterfallFeedState === null) {
+      const enabledSources = this.waterfallPreferenceProfile.enabledSources.slice();
+      this.interestWaterfallFeedState = {
+        mode: 'interest',
+        interestFallbackStarted: true,
+        query: '',
+        originalQuery: '',
+        queryStage: 'done',
+        queryHistory: [],
+        enabledSources,
+        preferenceDescription: '',
+        profile: this.currentWaterfallPreferenceProfile(),
+        shown: [],
+        current: null,
+        stable: [],
+        tail: [],
+        reserve: [],
+        sources: ['youtube', 'bilibili', 'x', 'hackernews', 'reddit', 'zhihu'].map(
+          (source: string): WaterfallSourceState => ({
+          source,
+          phase: enabledSources.indexOf(source) >= 0 ? 'loading' : 'exhausted',
+          continuation: null,
+          inFlight: enabledSources.indexOf(source) >= 0,
+          reservedCount: 0,
+          message: '正在汇集内容'
+        }))
+      };
+      const document = this.interestWaterfallDocument();
+      this.interestWaterfallHtml = renderAggregateSearchHomeDocument(document, false, true);
+      this.publishInterestWaterfallPayload();
+    }
+    if (!this.interestRecallStarted) {
+      this.interestRecallStarted = true;
+      this.runInterestRecall('home', null);
+    }
+  }
+
+  private shouldStartSearchInterestFallback(state: WaterfallFeedState): boolean {
+    if ((state.mode ?? 'search') !== 'search' || (state.queryStage ?? 'original') !== 'done' ||
+      state.interestFallbackStarted === true || state.enabledSources.length === 0) return false;
+    const candidates = (state.current === null ? [] : [state.current]).concat(
+      state.stable, state.tail, state.reserve ?? []);
+    return !candidates.some((candidate: WaterfallRankedCandidate): boolean =>
+      state.enabledSources.indexOf(candidate.source) >= 0);
+  }
+
+  private startSearchInterestFallback(document: HtmlHomeDocument): void {
+    if (this.waterfallFeedState === null) return;
+    const state = this.waterfallFeedState;
+    state.mode = 'interest';
+    state.interestFallbackStarted = true;
+    state.sources.forEach((source: WaterfallSourceState): void => {
+      if (state.enabledSources.indexOf(source.source) >= 0) {
+        source.phase = 'loading';
+        source.inFlight = true;
+        source.continuation = null;
+        source.message = '正在补充兴趣内容';
+      }
+    });
+    this.publishWaterfallPayload(document);
+    this.runInterestRecall('search', document);
+  }
+
+  private applyWaterfallUpdate(document: HtmlHomeDocument, update: WaterfallFeedUpdate): void {
+    this.waterfallFeedState = update.state;
+    this.publishWaterfallPayload(document);
+    if (update.loadRequests.length > 0) {
+      this.runWaterfallContinuation(document, update.loadRequests);
+    } else if (update.expansionRequest !== undefined) {
+      this.runWaterfallExpansion(document, update.expansionRequest);
+    } else if (this.shouldStartSearchInterestFallback(update.state)) {
+      this.startSearchInterestFallback(document);
+    }
+  }
+
+  private runWaterfallExpansion(document: HtmlHomeDocument, request: WaterfallQueryExpansionRequest): void {
+    const surfaceId = document.surfaceId ?? '';
+    aiLogInfo('[AIPhone][WaterfallExpansionStart] stage=' + request.stage);
+    this.canaryModel().complete(waterfallExpansionPrompt(request)).then((raw: string): void => {
+      if (this.waterfallFeedState === null || this.waterfallFeedSurfaceId !== surfaceId) {
+        return;
+      }
+      const query = parseWaterfallExpandedQuery(raw, this.waterfallFeedState.query);
+      if (query.length === 0) {
+        aiLogError('[AIPhone][WaterfallExpansionInvalid] stage=' + request.stage);
+        this.applyWaterfallUpdate(document, failWaterfallExpansion(this.waterfallFeedState, request.stage));
+        return;
+      }
+      aiLogInfo('[AIPhone][WaterfallExpansionReady] stage=' + request.stage + ' queryChars=' + query.length.toString());
+      this.applyWaterfallUpdate(
+        document,
+        applyWaterfallExpandedQuery(this.waterfallFeedState, request.stage, query, Date.now())
+      );
+    }).catch((error: Error): void => {
+      if (this.waterfallFeedState === null || this.waterfallFeedSurfaceId !== surfaceId) {
+        return;
+      }
+      aiLogError('[AIPhone][WaterfallExpansionFailed] stage=' + request.stage +
+        ' error=' + error.message.substring(0, 240));
+      this.applyWaterfallUpdate(document, failWaterfallExpansion(this.waterfallFeedState, request.stage));
+    });
+  }
+
+  private runWaterfallContinuation(document: HtmlHomeDocument, requests: WaterfallLoadRequest[]): void {
+    const surfaceId = document.surfaceId ?? '';
+    const networkRequests = requests.filter((request: WaterfallLoadRequest): boolean =>
+      request.mode === 'search' || request.continuation !== null).length;
+    aiLogInfo('[AIPhone][WaterfallContinuationRound] sources=' + requests.length.toString() +
+      ' network=' + networkRequests.toString() + ' queryStage=' +
+      (this.waterfallFeedState?.queryStage ?? 'original'));
+    callConfiguredAggregateSearchContinuation(
+      this.waterfallFeedState?.query ?? '',
+      requests,
+      (batch: AggregateSearchSourceBatch): void => {
+        if (this.waterfallFeedState === null || this.waterfallFeedSurfaceId !== surfaceId) {
+          return;
+        }
+        this.waterfallFeedState = mergeAggregateSearchContinuationBatch(
+          this.waterfallFeedState,
+          batch,
+          this.waterfallContinuationBatchIndex,
+          Date.now()
+        );
+        this.waterfallContinuationBatchIndex++;
+        aiLogInfo('[AIPhone][WaterfallContinuationBatch] source=' + batch.source +
+          ' count=' + (batch.videos.length + batch.posts.length).toString() +
+          ' hasNext=' + (batch.continuation === null ? 'false' : 'true'));
+        this.publishWaterfallPayload(document);
+      }
+    ).then((): void => {
+      if (this.waterfallFeedState === null || this.waterfallFeedSurfaceId !== surfaceId) {
+        return;
+      }
+      this.applyWaterfallUpdate(document, planWaterfallContinuation(this.waterfallFeedState));
+    }).catch((error: Error): void => {
+      aiLogError('[AIPhone][WaterfallContinuationFailed] error=' + error.message.substring(0, 240));
+    });
+  }
+
   private syncWaterfallPayloadUpdate(document: HtmlHomeDocument): void {
     if (document.kind !== 'aggregate-search' || document.waterfall === undefined) {
       this.waterfallPayloadJson = '';
@@ -1264,18 +1641,21 @@ struct Index {
     if (this.waterfallFeedState === null || this.waterfallFeedSurfaceId !== surfaceId) {
       this.waterfallFeedState = document.waterfall;
       this.waterfallFeedSurfaceId = surfaceId;
+      this.waterfallContinuationBatchIndex = 100;
     } else {
       this.waterfallFeedState = mergeWaterfallFeedSnapshot(
         this.waterfallFeedState,
         document.waterfall,
-        Date.now()
+        Date.now(),
+        false
       ).state;
     }
-    this.publishWaterfallPayload(document);
+    this.applyWaterfallUpdate(document, planWaterfallContinuation(this.waterfallFeedState));
   }
 
   private handleWaterfallClientAction(action: A2uiAction): boolean {
-    if (action.id !== 'waterfall.sources.select' && action.id !== 'waterfall.feed.advance') {
+    if (action.id !== 'waterfall.sources.select' && action.id !== 'waterfall.feed.advance' &&
+      action.id !== 'waterfall.behavior.record') {
       return false;
     }
     const document = this.currentHtmlHomeDocument();
@@ -1294,12 +1674,57 @@ struct Index {
         this.logHtmlHomeActionError(action, 'invalid_waterfall_source_selection');
         return true;
       }
-      this.waterfallFeedState = applyWaterfallSourceSelection(
-        this.waterfallFeedState,
+      const feedState = this.waterfallFeedState as WaterfallFeedState;
+      const interestState = this.interestWaterfallFeedState;
+      const addedSource = enabledSources.some((source: string): boolean =>
+        feedState.enabledSources.indexOf(source) < 0);
+      const interestAddedSource = interestState !== null && enabledSources.some(
+        (source: string): boolean => interestState.enabledSources.indexOf(source) < 0);
+      this.waterfallPreferenceProfile = this.waterfallPreferencesStore().saveEnabledSources(enabledSources);
+      configureWaterfallEnabledSourcesForRuntime(enabledSources as AggregateSearchSource[]);
+      if (this.interestWaterfallFeedState !== null) {
+        this.interestWaterfallFeedState = applyWaterfallSourceSelection(
+          this.interestWaterfallFeedState, enabledSources, Date.now()).state;
+        if (interestAddedSource) {
+          this.interestWaterfallFeedState.sources.forEach((source: WaterfallSourceState): void => {
+            if (enabledSources.indexOf(source.source) >= 0) {
+              source.phase = 'loading';
+              source.inFlight = true;
+            }
+          });
+        }
+        this.publishInterestWaterfallPayload();
+        if (interestAddedSource) this.runInterestRecall('home', null);
+      }
+      const next = applyWaterfallSourceSelection(
+        feedState,
         enabledSources,
         Date.now()
-      ).state;
-      this.publishWaterfallPayload(document);
+      );
+      if ((next.state.mode ?? 'search') === 'interest' && addedSource) {
+        next.state.sources.forEach((source: WaterfallSourceState): void => {
+          if (enabledSources.indexOf(source.source) >= 0) {
+            source.phase = 'loading';
+            source.inFlight = true;
+          }
+        });
+        this.waterfallFeedState = next.state;
+        this.publishWaterfallPayload(document);
+        this.runInterestRecall('search', document);
+      } else {
+        this.applyWaterfallUpdate(document, next);
+      }
+      return true;
+    }
+    if (action.id === 'waterfall.behavior.record') {
+      const behavior = waterfallBehaviorFromAction(action, surfaceId);
+      const candidate = behavior === null ? null : this.waterfallCandidate(
+        behavior.candidateId, this.waterfallFeedState);
+      if (behavior === null || candidate === null) {
+        this.logHtmlHomeActionError(action, 'invalid_waterfall_behavior');
+        return true;
+      }
+      this.recordWaterfallBehavior(candidate, behavior);
       return true;
     }
     const currentId = waterfallAdvanceCurrentFromAction(action, surfaceId);
@@ -1308,9 +1733,129 @@ struct Index {
       this.logHtmlHomeActionError(action, 'stale_waterfall_current');
       return true;
     }
-    this.waterfallFeedState = advanceWaterfallFeed(this.waterfallFeedState, Date.now()).state;
-    this.publishWaterfallPayload(document);
+    this.applyWaterfallUpdate(document, advanceWaterfallFeed(this.waterfallFeedState, Date.now()));
     return true;
+  }
+
+  private handleInterestWaterfallClientAction(action: A2uiAction): void {
+    const state = this.interestWaterfallFeedState;
+    const surfaceId = 'waterfall-interest-home';
+    if (action.id === 'waterfall.home.back') {
+      this.bimRootController.changeIndex(1, !this.bimReduceMotion);
+      return;
+    }
+    if (state === null) return;
+    if (action.id === 'waterfall.sources.select') {
+      const enabledSources = waterfallEnabledSourcesFromAction(action, surfaceId);
+      if (enabledSources === null) return;
+      const addedSource = enabledSources.some((source: string): boolean =>
+        state.enabledSources.indexOf(source) < 0);
+      this.waterfallPreferenceProfile = this.waterfallPreferencesStore().saveEnabledSources(enabledSources);
+      configureWaterfallEnabledSourcesForRuntime(enabledSources as AggregateSearchSource[]);
+      this.interestWaterfallFeedState = applyWaterfallSourceSelection(state, enabledSources, Date.now()).state;
+      if (addedSource) {
+        this.interestWaterfallFeedState.sources.forEach((source: WaterfallSourceState): void => {
+          if (enabledSources.indexOf(source.source) >= 0) {
+            source.phase = 'loading';
+            source.inFlight = true;
+          }
+        });
+      }
+      this.publishInterestWaterfallPayload();
+      if (addedSource) this.runInterestRecall('home', null);
+      const searchState = this.waterfallFeedState;
+      if (searchState !== null) {
+        const searchAddedSource = enabledSources.some((source: string): boolean =>
+          searchState.enabledSources.indexOf(source) < 0);
+        const document = this.currentHtmlHomeDocument();
+        const update = applyWaterfallSourceSelection(searchState, enabledSources, Date.now());
+        if (document.kind === 'aggregate-search' && document.waterfall !== undefined &&
+          (document.surfaceId ?? '') === this.waterfallFeedSurfaceId) {
+          if ((update.state.mode ?? 'search') === 'interest' && searchAddedSource) {
+            this.waterfallFeedState = update.state;
+            this.runInterestRecall('search', document);
+          } else {
+            this.applyWaterfallUpdate(document, update);
+          }
+        } else {
+          this.waterfallFeedState = update.state;
+        }
+      }
+      return;
+    }
+    if (action.id === 'waterfall.behavior.record') {
+      const behavior = waterfallBehaviorFromAction(action, surfaceId);
+      const candidate = behavior === null ? null : this.waterfallCandidate(behavior.candidateId, state);
+      if (behavior !== null && candidate !== null) this.recordWaterfallBehavior(candidate, behavior);
+      return;
+    }
+    if (action.id === 'waterfall.feed.advance') {
+      const currentId = waterfallAdvanceCurrentFromAction(action, surfaceId);
+      if (currentId !== null && state.current !== null && state.current.id === currentId) {
+        this.interestWaterfallFeedState = advanceWaterfallFeed(state, Date.now()).state;
+        this.publishInterestWaterfallPayload();
+      }
+    }
+  }
+
+  private waterfallCandidate(
+    candidateId: string,
+    state: WaterfallFeedState | null
+  ): WaterfallRankedCandidate | null {
+    if (state === null) return null;
+    const values = state.shown.concat(
+      state.current === null ? [] : [state.current], state.stable, state.tail, state.reserve ?? []);
+    for (let index = 0; index < values.length; index += 1) {
+      if (values[index].id === candidateId) return values[index];
+    }
+    return null;
+  }
+
+  private recordWaterfallBehavior(
+    candidate: WaterfallRankedCandidate,
+    args: WaterfallBehaviorActionArgs
+  ): void {
+    const format = candidate.format ?? (candidate.mediaType === 'video' ? 'landscape_video' :
+      (candidate.mediaType === 'image_text' ? 'image_text' : 'text'));
+    const event: WaterfallBehaviorEvidence = {
+      candidateId: candidate.id,
+      topics: (candidate.topics ?? []).slice(),
+      source: candidate.source,
+      format,
+      behavior: args.behavior,
+      durationMs: args.durationMs,
+      timestamp: args.timestamp
+    };
+    const delta = waterfallBehaviorDelta(event, this.waterfallSessionEvidence);
+    this.waterfallSessionEvidence.push(event);
+    if (delta !== 0) {
+      event.topics.forEach((topic: string): void => {
+        updateWaterfallPreferenceWeight(this.waterfallSessionTopicWeights, topic, delta, event.timestamp);
+      });
+      updateWaterfallPreferenceWeight(this.waterfallSessionSourceWeights, event.source, delta, event.timestamp);
+      updateWaterfallPreferenceWeight(this.waterfallSessionFormatWeights, event.format, delta, event.timestamp);
+    }
+    configureWaterfallPreferenceProfileForRuntime(this.currentWaterfallPreferenceProfile());
+    if (this.waterfallFeedState !== null) {
+      this.waterfallFeedState.profile = this.currentWaterfallPreferenceProfile();
+    }
+    if (this.interestWaterfallFeedState !== null) {
+      this.interestWaterfallFeedState.profile = this.currentWaterfallPreferenceProfile();
+    }
+    setTimeout((): void => {
+      try {
+        this.waterfallPreferenceProfile = this.waterfallPreferencesStore().recordBehavior(event);
+        configureWaterfallPreferenceProfileForRuntime(this.currentWaterfallPreferenceProfile());
+        if (this.waterfallFeedState !== null) {
+          this.waterfallFeedState.profile = this.currentWaterfallPreferenceProfile();
+        }
+        if (this.interestWaterfallFeedState !== null) {
+          this.interestWaterfallFeedState.profile = this.currentWaterfallPreferenceProfile();
+        }
+      } catch (_error) {
+        aiLogError('[AIPhone][WaterfallBehaviorRecord] ok=false candidateId=' + event.candidateId);
+      }
+    }, 0);
   }
 
   private scheduleMultiTaskPayloadRefresh(): void {
@@ -1443,9 +1988,10 @@ struct Index {
     this.loadModelPreset();
     this.loadBimMotionPreference();
     this.readDebugBuildState();
-    this.configureDidiMcpSandboxRuntime(true);
     this.configureComposioRuntimeForCurrentUser();
     this.loadPersonaOverrides();
+    this.loadPublicPersona();
+    this.loadWaterfallPreferences();
     this.loadPaymentAccounts();
     this.loadStripeReceivingProfile();
     void this.requestLocationPermissionOnLaunch();
@@ -1457,6 +2003,7 @@ struct Index {
     } catch (_error) {
     }
     this.refreshBimRecords();
+    void this.catchUpDailyBriefIfNeeded();
   }
 
   onPageShow(): void {
@@ -1465,6 +2012,7 @@ struct Index {
     this.requestPendingTrainPresaleResume();
     this.requestPendingBimSentinelMock();
     this.requestDailyBimSentinel();
+    void this.catchUpDailyBriefIfNeeded();
   }
 
   onPageHide(): void {
@@ -1521,6 +2069,289 @@ struct Index {
       store.loadSync();
     }
     this.refreshPersonaEditor(this.selectedPersonaId);
+  }
+
+  private publicPersonaStore(): PublicPersonaStore | null {
+    const context = this.getUIContext().getHostContext() as common.Context;
+    if (context === null) {
+      return null;
+    }
+    try {
+      return new PublicPersonaStore(preferences.getPreferencesSync(context, {
+        name: PUBLIC_PERSONA_STORE_NAME
+      }));
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  private updatePublicPersonaSnapshot(snapshot: PublicPersonaSnapshot | null): void {
+    this.publicPersonaSnapshot = snapshot;
+    this.publicPersonaRenderTick = this.publicPersonaRenderTick + 1;
+  }
+
+  private loadPublicPersona(): void {
+    if (this.publicPersonaInitialized) {
+      return;
+    }
+    this.publicPersonaInitialized = true;
+    const store = this.publicPersonaStore();
+    if (store === null) {
+      this.updatePublicPersonaSnapshot(null);
+      this.publicPersonaPhase = 'input';
+      return;
+    }
+    this.updatePublicPersonaSnapshot(store.load());
+    this.publicPersonaPhase = this.publicPersonaSnapshot !== null ? 'complete' :
+      (store.onboardingSeen() ? 'input' : 'welcome');
+  }
+
+  private openPublicPersona(): void {
+    aiLogInfo('[AIPhone][PublicPersonaEntry] open=true');
+    this.showPublicPersonaPage = true;
+  }
+
+  private skipPublicPersonaOnboarding(): void {
+    const store = this.publicPersonaStore();
+    if (store !== null) {
+      store.markOnboardingSeen();
+    }
+    this.publicPersonaPhase = 'input';
+    this.showPublicPersonaPage = false;
+  }
+
+  private async runPublicPersonaDiscovery(
+    jobId: number,
+    username: string,
+    mode: PublicPersonaSearchMode
+  ): Promise<void> {
+    try {
+      const candidates = await this.publicPersonaClient.discover(username, mode, (progress: PublicPersonaProgress): void => {
+        if (jobId === this.publicPersonaJobId) {
+          this.publicPersonaProgress = progress;
+          const probeResult = progress.message === '已找到公开账号' ? 'found' :
+            progress.message === '未找到该用户名' ? 'not_found' :
+              progress.message === '平台暂时无法确认' ? 'unknown' : '';
+          if (probeResult.length > 0) {
+            aiLogInfo(`[AIPhone][PublicPersonaProbe] platform=${progress.platform} result=${probeResult} ` +
+              `provider=${progress.state} completed=${progress.completed}/${progress.total}`);
+          }
+        }
+      });
+      if (jobId !== this.publicPersonaJobId) {
+        return;
+      }
+      this.publicPersonaCandidates = candidates;
+      this.publicPersonaPhase = 'awaiting_confirmation';
+    } catch (error) {
+      if (jobId !== this.publicPersonaJobId) {
+        return;
+      }
+      this.publicPersonaError = error instanceof Error ? error.message : '公开账号查找失败';
+      this.publicPersonaPhase = 'error';
+    }
+  }
+
+  private startPublicPersonaDiscovery(username: string, mode: PublicPersonaSearchMode): void {
+    const store = this.publicPersonaStore();
+    if (store !== null) {
+      store.markOnboardingSeen();
+    }
+    this.publicPersonaJobId++;
+    this.publicPersonaPhase = 'discovering';
+    this.publicPersonaCandidates = [];
+    this.publicPersonaProgress = null;
+    this.publicPersonaError = '';
+    const jobId = this.publicPersonaJobId;
+    void this.runPublicPersonaDiscovery(jobId, username, mode);
+  }
+
+  private async runPublicPersonaBuild(jobId: number, selected: PublicPersonaCandidate[]): Promise<void> {
+    try {
+      const snapshot = await this.publicPersonaClient.buildSnapshot(selected, this.getSettings(), (progress: PublicPersonaProgress): void => {
+        if (jobId === this.publicPersonaJobId) {
+          this.publicPersonaProgress = progress;
+          this.publicPersonaPhase = 'reading';
+        }
+      });
+      if (jobId !== this.publicPersonaJobId) {
+        return;
+      }
+      const store = this.publicPersonaStore();
+      if (store === null || !store.save(snapshot)) {
+        throw new Error('画像保存失败');
+      }
+      this.updatePublicPersonaSnapshot(snapshot);
+      this.publicPersonaProgress = null;
+      this.publicPersonaPhase = 'complete';
+    } catch (error) {
+      if (jobId !== this.publicPersonaJobId) {
+        return;
+      }
+      this.publicPersonaError = error instanceof Error ? error.message : '画像生成失败';
+      this.publicPersonaPhase = 'error';
+    }
+  }
+
+  private confirmPublicPersona(candidateIds: string[]): void {
+    const selected = this.publicPersonaCandidates.map((candidate: PublicPersonaCandidate): PublicPersonaCandidate => ({
+      id: candidate.id,
+      platform: candidate.platform,
+      profileUrl: candidate.profileUrl,
+      displayName: candidate.displayName,
+      username: candidate.username,
+      avatarUrl: candidate.avatarUrl,
+      exists: true,
+      ownershipConfidence: candidate.ownershipConfidence,
+      ownershipBand: candidate.ownershipBand,
+      selected: candidateIds.indexOf(candidate.id) >= 0,
+      providerState: candidate.providerState,
+      fetchedAt: candidate.fetchedAt,
+      sourceUrl: candidate.sourceUrl
+    }));
+    if (candidateIds.length === 0) {
+      this.publicPersonaError = '至少选择一个已确认账号';
+      return;
+    }
+    this.publicPersonaJobId++;
+    this.publicPersonaPhase = 'reading';
+    this.publicPersonaProgress = null;
+    this.publicPersonaError = '';
+    void this.runPublicPersonaBuild(this.publicPersonaJobId, selected);
+  }
+
+  private savePublicPersonaMarkdown(markdown: string): boolean {
+    if (this.publicPersonaSnapshot === null) {
+      return false;
+    }
+    if (parsePublicPersonaMarkdown(markdown) === null) {
+      this.publicPersonaError = 'Markdown 缺少姓名、摘要或画像固定章节，未保存。';
+      return false;
+    }
+    const updated: PublicPersonaSnapshot = {
+      schemaVersion: 1,
+      personaMarkdown: markdown,
+      primaryAvatarUrl: this.publicPersonaSnapshot.primaryAvatarUrl,
+      sources: this.publicPersonaSnapshot.sources,
+      generatedAt: this.publicPersonaSnapshot.generatedAt,
+      mbtiHidden: this.publicPersonaSnapshot.mbtiHidden
+    };
+    const safe = sanitizePublicPersonaSnapshot(updated as Object);
+    if (safe === null) {
+      this.publicPersonaError = 'Markdown 缺少画像固定章节，未保存。';
+      return false;
+    }
+    this.publicPersonaJobId++;
+    const store = this.publicPersonaStore();
+    if (store === null || !store.save(safe)) {
+      this.publicPersonaError = 'Markdown 保存失败，请重试。';
+      return false;
+    }
+    this.updatePublicPersonaSnapshot(safe);
+    this.publicPersonaError = '';
+    return true;
+  }
+
+  private async runPublicPersonaReinference(jobId: number, snapshot: PublicPersonaSnapshot): Promise<void> {
+    try {
+      const result = await this.publicPersonaClient.reinferMbti(snapshot, this.getSettings());
+      if (jobId !== this.publicPersonaJobId || this.publicPersonaSnapshot === null) {
+        return;
+      }
+      const markdown = replacePublicPersonaMbti(snapshot.personaMarkdown, result.mbtiType, result.mbtiConfidence);
+      const updated: PublicPersonaSnapshot = {
+        schemaVersion: 1,
+        personaMarkdown: markdown,
+        primaryAvatarUrl: snapshot.primaryAvatarUrl,
+        sources: snapshot.sources,
+        generatedAt: snapshot.generatedAt,
+        mbtiHidden: false
+      };
+      const safe = sanitizePublicPersonaSnapshot(updated as Object);
+      if (safe === null) {
+        throw new Error('重新推测结果未通过本地校验');
+      }
+      const store = this.publicPersonaStore();
+      if (store === null || !store.save(safe)) {
+        throw new Error('MBTI 保存失败');
+      }
+      this.updatePublicPersonaSnapshot(safe);
+      this.publicPersonaError = '';
+    } catch (error) {
+      if (jobId === this.publicPersonaJobId) {
+        this.publicPersonaError = error instanceof Error ? error.message : 'MBTI 重新推测失败';
+      }
+    }
+  }
+
+  private reinferPublicPersonaMbti(): void {
+    if (this.publicPersonaSnapshot === null) {
+      return;
+    }
+    this.publicPersonaJobId++;
+    const jobId = this.publicPersonaJobId;
+    void this.runPublicPersonaReinference(jobId, this.publicPersonaSnapshot);
+  }
+
+  private setPublicPersonaMbtiHidden(hidden: boolean): boolean {
+    if (this.publicPersonaSnapshot === null) {
+      return false;
+    }
+    const updated: PublicPersonaSnapshot = {
+      schemaVersion: 1,
+      personaMarkdown: this.publicPersonaSnapshot.personaMarkdown,
+      primaryAvatarUrl: this.publicPersonaSnapshot.primaryAvatarUrl,
+      sources: this.publicPersonaSnapshot.sources,
+      generatedAt: this.publicPersonaSnapshot.generatedAt,
+      mbtiHidden: hidden
+    };
+    const safe = sanitizePublicPersonaSnapshot(updated as Object);
+    if (safe === null) {
+      this.publicPersonaError = 'MBTI 状态未通过本地校验。';
+      return false;
+    }
+    this.publicPersonaJobId++;
+    const store = this.publicPersonaStore();
+    if (store === null || !store.save(safe)) {
+      this.publicPersonaError = 'MBTI 状态保存失败，请重试。';
+      return false;
+    }
+    this.updatePublicPersonaSnapshot(safe);
+    this.publicPersonaError = '';
+    return true;
+  }
+
+  private deletePublicPersona(): boolean {
+    this.publicPersonaJobId++;
+    const store = this.publicPersonaStore();
+    if (store === null || !store.deleteSnapshot()) {
+      this.publicPersonaError = '画像删除失败，请重试。';
+      return false;
+    }
+    this.updatePublicPersonaSnapshot(null);
+    this.publicPersonaCandidates = [];
+    this.publicPersonaProgress = null;
+    this.publicPersonaError = '';
+    this.publicPersonaPhase = 'input';
+    return true;
+  }
+
+  private publicPersonaBusy(): boolean {
+    return this.publicPersonaPhase === 'discovering' || this.publicPersonaPhase === 'reading' ||
+      this.publicPersonaPhase === 'summarizing';
+  }
+
+  private publicPersonaStatus(): string {
+    if (this.publicPersonaBusy()) {
+      return this.publicPersonaProgress === null ? '正在建立画像' : this.publicPersonaProgress.message;
+    }
+    if (this.publicPersonaSnapshot !== null) {
+      return '画像已生成';
+    }
+    if (this.publicPersonaPhase === 'error') {
+      return '画像暂未完成';
+    }
+    return '';
   }
 
   private paymentAccountPreferences(): preferences.Preferences | null {
@@ -1934,11 +2765,9 @@ struct Index {
     }
   }
 
-  private savePersonaOverrides(): void {
+  private savePersonaOverrides(): boolean {
     const store = this.personaPackStore();
-    if (store !== null) {
-      store.saveSync();
-    }
+    return store !== null && store.saveSync();
   }
 
   private selectPersonaForEdit(personaId: string): void {
@@ -1960,21 +2789,41 @@ struct Index {
     this.personaSaveMessage = '已恢复默认';
   }
 
-  private applyPersonaMemoryUpdate(update: PersonaMemoryUpdateRequest): void {
+  private applyPersonaMemoryUpdate(update: PersonaMemoryUpdateRequest): boolean {
     const pack = personaPackForId(update.personaId);
     if (pack.manifest.id !== update.personaId) {
       aiLogError('[AIPhone][PersonaMemoryUpdate] ok=false reason=unknown_persona personaId=' + update.personaId);
-      return;
+      return false;
     }
     updatePersonaPackText(
       update.personaId,
       pack.soul,
       mergePersonaStablePreference(pack.memory, update.memoryText)
     );
-    this.savePersonaOverrides();
+    if (!this.savePersonaOverrides()) {
+      updatePersonaPackText(update.personaId, pack.soul, pack.memory);
+      this.refreshPersonaEditor(update.personaId);
+      aiLogError('[AIPhone][PersonaMemoryUpdate] ok=false reason=persist_failed personaId=' + update.personaId);
+      return false;
+    }
+    if (update.personaId === 'entertainment_companion' &&
+      isStableWaterfallContentPreference(update.memoryText)) {
+      try {
+        const rules = this.waterfallPreferenceProfile.explicitRules.concat(
+          waterfallExplicitPreferencesFromStatement(update.memoryText));
+        this.waterfallPreferenceProfile = this.waterfallPreferencesStore().replaceExplicitPreferences(rules);
+        configureWaterfallPreferenceProfileForRuntime(this.currentWaterfallPreferenceProfile());
+        if (this.waterfallFeedState !== null) {
+          this.waterfallFeedState.profile = this.currentWaterfallPreferenceProfile();
+        }
+      } catch (_error) {
+        aiLogError('[AIPhone][WaterfallPreferenceProjection] ok=false source=memory_update');
+      }
+    }
     this.refreshPersonaEditor(update.personaId);
     this.personaSaveMessage = '已保存：' + update.summary;
     aiLogInfo('[AIPhone][PersonaMemoryUpdate] ok=true personaId=' + update.personaId + ' summary=' + update.summary);
+    return true;
   }
 
   private isPersonaEditorAction(action: A2uiAction): boolean {
@@ -2047,6 +2896,48 @@ struct Index {
       this.bimStoreInstance = new BimStore(native);
     }
     return this.bimStoreInstance;
+  }
+
+  private waterfallPreferencesStore(): WaterfallPreferencesStore {
+    if (this.waterfallPreferencesStoreInstance === null) {
+      const context = this.getUIContext().getHostContext() as common.Context;
+      const native = preferences.getPreferencesSync(context, { name: WATERFALL_PREFERENCES_STORE_NAME });
+      this.waterfallPreferencesStoreInstance = new WaterfallPreferencesStore(native);
+    }
+    return this.waterfallPreferencesStoreInstance;
+  }
+
+  private currentWaterfallPreferenceProfile(): WaterfallPreferenceProfile {
+    return {
+      version: 1,
+      topicWeights: this.waterfallPreferenceProfile.topicWeights.slice(),
+      sourceWeights: this.waterfallPreferenceProfile.sourceWeights.slice(),
+      formatWeights: this.waterfallPreferenceProfile.formatWeights.slice(),
+      explicitRules: this.waterfallPreferenceProfile.explicitRules.slice(),
+      recentEvidence: this.waterfallPreferenceProfile.recentEvidence.slice(),
+      enabledSources: this.waterfallPreferenceProfile.enabledSources.slice(),
+      updatedAt: this.waterfallPreferenceProfile.updatedAt,
+      sessionTopicWeights: this.waterfallSessionTopicWeights.slice(),
+      sessionSourceWeights: this.waterfallSessionSourceWeights.slice(),
+      sessionFormatWeights: this.waterfallSessionFormatWeights.slice()
+    };
+  }
+
+  private loadWaterfallPreferences(): void {
+    try {
+      this.waterfallPreferenceProfile = this.waterfallPreferencesStore().load();
+    } catch (_error) {
+      this.waterfallPreferenceProfile = emptyWaterfallPreferenceProfile();
+    }
+    try {
+      this.waterfallPreferenceProfile = this.waterfallPreferencesStore().replaceExplicitPreferences(
+        waterfallExplicitPreferencesFromMemory(personaPackForId('entertainment_companion').memory));
+    } catch (_error) {
+      aiLogError('[AIPhone][WaterfallPreferenceProjection] ok=false source=startup');
+    }
+    configureWaterfallEnabledSourcesForRuntime(
+      this.waterfallPreferenceProfile.enabledSources as AggregateSearchSource[]);
+    configureWaterfallPreferenceProfileForRuntime(this.currentWaterfallPreferenceProfile());
   }
 
   private refreshBimRecords(): void {
@@ -2326,12 +3217,13 @@ struct Index {
         }
         return accepted;
       },
-      onMemoryUpdate: (update: PersonaMemoryUpdateRequest, generation: number): void => {
+      onMemoryUpdate: (update: PersonaMemoryUpdateRequest, generation: number): boolean => {
         if (runtimeCallbackIsCurrent(
           this.activeRuntimeOwner, this.runtimeGeneration, 'multi_agent', generation
         )) {
-          this.applyPersonaMemoryUpdate(update);
+          return this.applyPersonaMemoryUpdate(update);
         }
+        return false;
       },
       onMailDetail: async (
         result: MailDetailInPlaceEvent,
@@ -2605,6 +3497,7 @@ struct Index {
       ' kind=' + document.kind +
       ' chars=' + html.length.toString() +
       ' blocks=' + document.blocks.length.toString() +
+      ' contentDigest=' + sha256Digest(html) +
       (document.kind === 'multi-task' ?
         ' activeSectionId=' + (document.activeSectionId ?? 'none') +
         ' multiTaskBlocks=' + document.blocks.filter((block: HtmlHomeBlock) => block.kind === 'multi-task-section').length.toString() :
@@ -2880,6 +3773,7 @@ struct Index {
   }
 
   private async openSocialHub(): Promise<void> {
+    aiLogInfo('[AIPhone][SocialHubEntry] open=true');
     this.showHistory = false;
     this.isBusy = false;
     this.isAwaitingFirstSurface = false;
@@ -3111,6 +4005,11 @@ struct Index {
     this.isBusy = false;
     this.isAwaitingFirstSurface = false;
     this.messages = [];
+    this.waterfallSessionTopicWeights = [];
+    this.waterfallSessionSourceWeights = [];
+    this.waterfallSessionFormatWeights = [];
+    this.waterfallSessionEvidence = [];
+    configureWaterfallPreferenceProfileForRuntime(this.currentWaterfallPreferenceProfile());
     this.registeredPageSnapshotStore.clear();
     this.registeredPageRenderGeneration = 0;
     this.currentSurface = this.surfaceSnapshot(createSeedA2uiSurface());
@@ -3184,6 +4083,277 @@ struct Index {
       return null;
     }
     return model.dynamicToolConnect;
+  }
+
+  private dailyBriefStore(): DailyBriefStore | null {
+    const context = this.getUIContext().getHostContext() as common.Context;
+    return context === null ? null : new DailyBriefStore(context);
+  }
+
+  private async openDailyBrief(regenerate: boolean): Promise<boolean> {
+    const store = this.dailyBriefStore();
+    const now = new Date();
+    const date = dailyBriefDate(now);
+    if (store === null) {
+      this.forceApplySurface(createDailyBriefErrorSurface(date, '日报存储不可用'), 'daily_brief_store_missing');
+      return false;
+    }
+    const existing = store.snapshotForDate(date);
+    const preference = store.loadPreference();
+    const decision = decideDailyBriefOpen(existing, regenerate);
+    this.dailyBriefGeneration += 1;
+    const generation = this.dailyBriefGeneration;
+    if (decision === 'open_existing') {
+      this.dailyBriefSnapshot = existing;
+      this.finishForegroundTurn();
+      this.forceApplySurface(
+        createDailyBriefSurface(existing as DailyBriefSnapshot, preference),
+        'daily_brief_open_existing'
+      );
+      return true;
+    }
+
+    this.dailyBriefSnapshot = existing;
+    this.isBusy = true;
+    if (existing === null) {
+      this.forceApplySurface(createDailyBriefLoadingSurface(date), 'daily_brief_generate_first');
+    } else {
+      this.forceApplySurface(createDailyBriefSurface(existing, preference), 'daily_brief_regenerate');
+    }
+    try {
+      const generated = await generateDailyBrief({ now, preference, budgetMs: 120000 });
+      if (!shouldApplyDailyBriefGeneration(generation, this.dailyBriefGeneration)) {
+        return false;
+      }
+      const storedWinner = selectDailyBriefStoredWinnerBeforeSave(
+        store.snapshotForDate(date), regenerate
+      );
+      if (storedWinner !== null) {
+        this.finishForegroundTurn();
+        this.dailyBriefSnapshot = storedWinner;
+        this.forceApplySurface(
+          createDailyBriefSurface(storedWinner, preference),
+          'daily_brief_stored_winner'
+        );
+        return true;
+      }
+      const saved = store.saveSnapshot(generated);
+      const selected = selectDailyBriefSnapshotAfterSave(existing, generated, saved);
+      this.finishForegroundTurn();
+      if (!saved || selected === null) {
+        const message = '日报快照保存失败';
+        if (existing === null) {
+          this.forceApplySurface(createDailyBriefErrorSurface(date, message), 'daily_brief_save_failed');
+        }
+        this.applyPanelState(updateConnectionPanelState(this.currentPanelState(), {
+          ok: false,
+          status: 'error',
+          message,
+          requestDebug: this.lastModelRequest,
+          assistantDebug: this.lastModelOutput,
+          error: message
+        }));
+        return false;
+      }
+      this.dailyBriefSnapshot = selected;
+      this.forceApplySurface(createDailyBriefSurface(selected, preference), 'daily_brief_generated');
+      this.applyPanelState(updateConnectionPanelState(this.currentPanelState(), {
+        ok: true,
+        status: 'ready',
+        message: '个人日报已更新。',
+        requestDebug: this.lastModelRequest,
+        assistantDebug: this.lastModelOutput,
+        error: ''
+      }));
+      return true;
+    } catch (error) {
+      if (!shouldApplyDailyBriefGeneration(generation, this.dailyBriefGeneration)) {
+        return false;
+      }
+      this.finishForegroundTurn();
+      const message = error instanceof Error ? error.message : JSON.stringify(error);
+      if (existing === null) {
+        this.forceApplySurface(createDailyBriefErrorSurface(date, message), 'daily_brief_generate_failed');
+      }
+      this.applyPanelState(updateConnectionPanelState(this.currentPanelState(), {
+        ok: false,
+        status: 'error',
+        message: message.length > 0 ? message : '个人日报生成失败',
+        requestDebug: this.lastModelRequest,
+        assistantDebug: this.lastModelOutput,
+        error: message
+      }));
+      return false;
+    }
+  }
+
+  private async handleDailyBriefClientAction(action: A2uiAction): Promise<boolean> {
+    const allowed = action.id === 'daily.brief.regenerate' ||
+      action.id === 'daily.brief.preference.save' ||
+      action.id === 'daily.brief.history.open' ||
+      action.id === 'daily.brief.mail.read' ||
+      action.id === 'daily.brief.route.open' ||
+      action.id === 'daily.brief.ride.estimate' ||
+      action.id === 'daily.brief.discovery.open';
+    if (!allowed) {
+      return false;
+    }
+    if (!isValidDailyBriefAction(action)) {
+      this.logHtmlHomeActionError(action, 'invalid_daily_brief_action');
+      return true;
+    }
+    if (action.id === 'daily.brief.regenerate') {
+      await this.openDailyBrief(true);
+      return true;
+    }
+    const store = this.dailyBriefStore();
+    if (store === null) {
+      this.logHtmlHomeActionError(action, 'daily_brief_store_missing');
+      return true;
+    }
+    if (action.id === 'daily.brief.preference.save') {
+      const preference = action.args as DailyBriefPreference;
+      if (!store.savePreference(preference)) {
+        this.logHtmlHomeActionError(action, 'daily_brief_preference_save_failed');
+        return true;
+      }
+      const context = this.getUIContext().getHostContext() as common.Context;
+      scheduleNextDailyBrief(context.applicationInfo.name, new Date(), preference.targetTime);
+      if (this.dailyBriefSnapshot !== null) {
+        this.forceApplySurface(
+          createDailyBriefSurface(this.dailyBriefSnapshot, store.loadPreference()),
+          'daily_brief_preference_saved'
+        );
+      }
+      return true;
+    }
+    if (action.id === 'daily.brief.history.open') {
+      const direction = dailyBriefHistoryDirection(action.args);
+      if (direction === null) {
+        this.logHtmlHomeActionError(action, 'daily_brief_history_invalid');
+        return true;
+      }
+      let selected: DailyBriefSnapshot | null = null;
+      if (direction === 'today') {
+        selected = store.snapshotForDate(dailyBriefDate(new Date()));
+      } else {
+        const snapshots = store.loadSnapshots();
+        const current = this.dailyBriefSnapshot === null ?
+          store.snapshotForDate(dailyBriefDate(new Date())) : this.dailyBriefSnapshot;
+        if (current !== null) {
+          for (let index = 0; index < snapshots.length; index++) {
+            if (snapshots[index].date !== current.date) {
+              continue;
+            }
+            const target = direction === 'previous' ? index - 1 : index + 1;
+            if (target >= 0 && target < snapshots.length) {
+              selected = snapshots[target];
+            }
+            break;
+          }
+        }
+      }
+      if (selected !== null) {
+        this.dailyBriefSnapshot = selected;
+        this.forceApplySurface(
+          createDailyBriefSurface(selected, store.loadPreference()),
+          'daily_brief_history_' + direction
+        );
+      }
+      return true;
+    }
+    if (action.id === 'daily.brief.mail.read') {
+      const request: DailyBriefMailReadRequest | null = dailyBriefMailReadRequest(action.args);
+      if (request === null) {
+        this.logHtmlHomeActionError(action, 'daily_brief_mail_invalid');
+        return true;
+      }
+      await this.callToolById(
+        request.toolId,
+        action.prompt.length > 0 ? action.prompt : action.label,
+        action.id,
+        request.args
+      );
+      return true;
+    }
+    if (action.id === 'daily.brief.route.open' || action.id === 'daily.brief.ride.estimate') {
+      const date = this.dailyBriefSnapshot === null ? dailyBriefDate(new Date()) : this.dailyBriefSnapshot.date;
+      const request = dailyBriefScenarioToolRequest(action.id, date);
+      if (request === null) {
+        this.logHtmlHomeActionError(action, 'daily_brief_scenario_invalid');
+        return true;
+      }
+      if (request.toolId === 'maps.route.open') {
+        const scenario = dailyBriefDemoScenario(date);
+        try {
+          const context = this.getUIContext().getHostContext() as common.Context;
+          await petalMaps.openMapRoutePlan(context, {
+            originPosition: { longitude: scenario.originLongitude, latitude: scenario.originLatitude },
+            originName: scenario.origin,
+            destinationPosition: {
+              longitude: scenario.destinationLongitude,
+              latitude: scenario.destinationLatitude
+            },
+            destinationName: scenario.destination,
+            vehicleType: petalMaps.VehicleType.DRIVING,
+            coordinateType: mapCommon.CoordinateType.GCJ02
+          });
+          aiLogInfo('[AIPhone][DailyBriefRouteOpen] ok=true');
+        } catch (error) {
+          const businessError = error as BusinessError;
+          aiLogError('[AIPhone][DailyBriefRouteOpen] ok=false code=' + businessError.code.toString());
+        }
+      } else {
+        await this.callToolById(request.toolId, action.label, action.id, request.args);
+      }
+      return true;
+    }
+    if (this.dailyBriefSnapshot !== null) {
+      const surface = createDailyBriefWaterfallSurface(this.dailyBriefSnapshot);
+      if (surface !== null) {
+        this.forceApplySurface(surface, 'daily_brief_discovery');
+      }
+    }
+    return true;
+  }
+
+  private async catchUpDailyBriefIfNeeded(): Promise<void> {
+    const store = this.dailyBriefStore();
+    const context = this.getUIContext().getHostContext() as common.Context;
+    if (store === null || context === null) {
+      return;
+    }
+    const now = new Date();
+    const preference = store.loadPreference();
+    scheduleNextDailyBrief(context.applicationInfo.name, now, preference.targetTime);
+    const existing = store.snapshotForDate(dailyBriefDate(now));
+    const eligible = shouldStartDailyBriefCatchUp(
+      now, preference.targetTime, existing !== null, false
+    );
+    const transition = transitionDailyBriefCatchUp(
+      this.dailyBriefCatchUpPending, 'lifecycle', eligible, this.isBusy
+    );
+    this.dailyBriefCatchUpPending = transition.pending;
+    if (!transition.run) {
+      return;
+    }
+    await this.openDailyBrief(false);
+  }
+
+  private async resumeDailyBriefCatchUpAfterIdle(): Promise<void> {
+    await Promise.resolve();
+    await this.catchUpDailyBriefIfNeeded();
+  }
+
+  private finishForegroundTurn(): void {
+    this.isBusy = false;
+    const transition = transitionDailyBriefCatchUp(
+      this.dailyBriefCatchUpPending, 'idle', false, this.isBusy
+    );
+    this.dailyBriefCatchUpPending = transition.pending;
+    if (transition.run) {
+      void this.resumeDailyBriefCatchUpAfterIdle();
+    }
   }
 
   private async openExternalUrl(
@@ -3405,6 +4575,19 @@ struct Index {
     if (this.showDeepSearch) {
       this.closeDeepSearch();
     }
+    const directDailyBriefRequest = resolveA2uiHomeSubmitToolRequest(trimmed);
+    if (directDailyBriefRequest !== null) {
+      this.inputPlaceholder = DEFAULT_INPUT_PLACEHOLDER;
+      this.appendMessage('user', visibleText);
+      this.inputText = inputTextAfterPromptSubmit(this.inputText);
+      await this.callToolById(
+        directDailyBriefRequest.toolId,
+        directDailyBriefRequest.prompt,
+        directDailyBriefRequest.actionId,
+        directDailyBriefRequest.args
+      );
+      return;
+    }
     const modelPrompt = modelPromptWithActionContext(trimmed, actionId, actionArgs);
     const request: BimForegroundRequest = buildBimForegroundRequest(
       modelPrompt, this.bimStore().list(), sourceBimId
@@ -3525,7 +4708,7 @@ struct Index {
     } finally {
       if (this.runtimeGeneration === turnGeneration) {
         this.isAwaitingFirstSurface = false;
-        this.isBusy = false;
+        this.finishForegroundTurn();
         if (isMultiTaskSurface(this.currentSurface)) {
           this.syncMultiTaskPayloadUpdate(this.withMultiTaskActiveSection(this.currentHtmlHomeDocument()));
           this.scheduleMultiTaskPayloadRefresh();
@@ -5297,6 +6480,9 @@ struct Index {
 
   private async handleClientAction(action: A2uiAction): Promise<void> {
     aiLogInfo('[AIPhone][A2uiHomeClientAction] id=' + action.id);
+    if (await this.handleDailyBriefClientAction(action)) {
+      return;
+    }
     if (action.id === 'html_mail_calendar_add') {
       await this.addSuggestedMailCalendarEvent(action);
       return;
@@ -5783,7 +6969,7 @@ struct Index {
       if (usesPageBusy && runtimeCallbackIsCurrent(
         this.activeRuntimeOwner, this.runtimeGeneration, 'multi_agent', actionGeneration
       )) {
-        this.isBusy = false;
+        this.finishForegroundTurn();
       }
     }
   }
@@ -5833,7 +7019,7 @@ struct Index {
         if (runtimeCallbackIsCurrent(
           this.activeRuntimeOwner, this.runtimeGeneration, 'multi_agent', actionGeneration
         )) {
-          this.isBusy = false;
+          this.finishForegroundTurn();
         }
       }
       return;
@@ -5861,7 +7047,7 @@ struct Index {
           action.args === undefined ? null : action.args
         );
       } finally {
-        this.isBusy = false;
+        this.finishForegroundTurn();
       }
       return;
     }
@@ -6094,6 +7280,20 @@ struct Index {
       ' promptChars=' + prompt.length.toString() +
       ' actionId=' + actionId +
       ' gateway=' + TOOL_GATEWAY_URL);
+    if (toolId === 'daily.brief.open') {
+      let regenerate = prompt.indexOf('重新生成') >= 0 ||
+        prompt.indexOf('重做日报') >= 0 || prompt.indexOf('刷新日报') >= 0;
+      if (args !== null) {
+        const validation = validateRegisteredPageActionArgs(toolId, args);
+        if (!validation.ok) {
+          aiLogError('[AIPhone][DailyBriefOpenRejected] code=' + validation.code);
+          return false;
+        }
+        const values = args as Record<string, Object | string | number | boolean | null | undefined>;
+        regenerate = regenerate || values['regenerate'] === true;
+      }
+      return this.openDailyBrief(regenerate);
+    }
     if (toolId === 'worldcup.open') {
       aiLogInfo('[AIPhone][AnythingDemoRouteByTool] actionId=' + actionId +
         ' promptChars=' + prompt.length.toString());
@@ -6438,7 +7638,7 @@ struct Index {
         error: message
       }));
     } finally {
-      this.isBusy = false;
+      this.finishForegroundTurn();
     }
   }
 
@@ -6448,7 +7648,7 @@ struct Index {
         this.closeBimDetail();
         return true;
       }
-      if (this.bimRootIndex === 0) {
+      if (this.bimRootIndex === 0 || this.bimRootIndex === 2) {
         this.bimRootController.changeIndex(1, !this.bimReduceMotion);
         return true;
       }
@@ -6602,6 +7802,44 @@ struct Index {
           this.configureDidiMcpSandboxRuntime(isOn);
         }
       })
+    } else if (this.showPublicPersonaPage) {
+      ForEach([this.publicPersonaRenderTick], (_tick: number) => {
+        PublicPersonaPage({
+          phase: this.publicPersonaPhase,
+          candidates: this.publicPersonaCandidates,
+          progress: this.publicPersonaProgress,
+          snapshot: this.publicPersonaSnapshot,
+          errorMessage: this.publicPersonaError,
+          onBack: () => {
+            this.showPublicPersonaPage = false;
+          },
+          onChooseSetup: () => {
+            this.publicPersonaPhase = 'input';
+            this.publicPersonaError = '';
+          },
+          onSkip: () => {
+            this.skipPublicPersonaOnboarding();
+          },
+          onStartDiscovery: (username: string, mode: PublicPersonaSearchMode) => {
+            this.startPublicPersonaDiscovery(username, mode);
+          },
+          onConfirm: (candidateIds: string[]) => {
+            this.confirmPublicPersona(candidateIds);
+          },
+          onSaveMarkdown: (markdown: string): boolean => {
+            return this.savePublicPersonaMarkdown(markdown);
+          },
+          onReinferMbti: () => {
+            this.reinferPublicPersonaMbti();
+          },
+          onSetMbtiHidden: (hidden: boolean) => {
+            this.setPublicPersonaMbtiHidden(hidden);
+          },
+          onDelete: (): boolean => {
+            return this.deletePublicPersona();
+          }
+        })
+      }, (tick: number) => tick.toString())
     } else {
       Swiper(this.bimRootController) {
         Stack({ alignContent: Alignment.Center }) {
@@ -6661,6 +7899,19 @@ struct Index {
         onRememberBim: () => {
           this.rememberSuggestedBim();
         },
+        onReturnDailyBrief: () => {
+          aiLogInfo('[AIPhone][DailyBriefReturn] source=native_child');
+          const snapshot = this.dailyBriefSnapshot;
+          const store = this.dailyBriefStore();
+          if (snapshot !== null && store !== null) {
+            this.forceApplySurface(
+              createDailyBriefSurface(snapshot, store.loadPreference()),
+              'daily_brief_return'
+            );
+            return;
+          }
+          void this.openDailyBrief(false);
+        },
         onToggleHistory: () => {
           this.showHistory = !this.showHistory;
         },
@@ -6669,8 +7920,8 @@ struct Index {
           this.showConfigPage = true;
           this.refreshComposioAuth();
         },
-        onOpenSocialHub: () => {
-          this.openSocialHub();
+        onOpenPublicPersona: () => {
+          this.openPublicPersona();
         },
         onResetSession: () => {
           this.resetCurrentSession();
@@ -6731,6 +7982,20 @@ struct Index {
           this.sendAction(action);
         }
       })
+
+      HtmlHomeSurfaceView({
+        html: this.interestWaterfallHtml,
+        waterfallPayloadJson: this.interestWaterfallPayloadJson,
+        waterfallPayloadTick: this.interestWaterfallPayloadTick,
+        isBusy: false,
+        renderTick: this.interestWaterfallPayloadTick,
+        onAction: (action: A2uiAction): void => {
+          this.handleInterestWaterfallClientAction(action);
+        },
+        onWaterfallFullscreenChange: (_active: boolean): void => {}
+      })
+      .width('100%')
+      .height('100%')
       }
       .width('100%')
       .height('100%')
@@ -6742,6 +8007,7 @@ struct Index {
       .curve(A2UI_MOTION_MOVE_CURVE)
       .onChange((index: number) => {
         this.bimRootIndex = index;
+        if (index === 2) this.ensureInterestWaterfall();
       })
     }
   }

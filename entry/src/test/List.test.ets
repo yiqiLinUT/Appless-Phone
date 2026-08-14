@@ -55,6 +55,8 @@ import mediaVideoClientTest from './MediaVideoClient.test';
 import aggregateSearchA2uiTest from './AggregateSearchA2ui.test';
 import multiTaskA2uiTest from './MultiTaskA2ui.test';
 import aggregateSearchClientTest from './AggregateSearchClient.test';
+import waterfallRankingReplayTest from './WaterfallRankingReplay.test';
+import waterfallPreferencesStoreTest from './WaterfallPreferencesStore.test';
 import paymentCoreTest from './PaymentCore.test';
 import paymentA2uiTest from './PaymentA2ui.test';
 import payPalPaymentClientTest from './PayPalPaymentClient.test';
@@ -111,6 +113,11 @@ import bimRuntimeTest from './BimRuntime.test';
 import bimDailyReminderTest from './BimDailyReminder.test';
 import bimHomePageTest from './BimHomePage.test';
 import capabilityRuntimeTest from './CapabilityRuntime.test';
+import publicPersonaTest from './PublicPersona.test';
+import dailyBriefCoreTest from './DailyBriefCore.test';
+import dailyBriefStoreTest from './DailyBriefStore.test';
+import dailyBriefGeneratorTest from './DailyBriefGenerator.test';
+import dailyBriefSchedulerTest from './DailyBriefScheduler.test';
 
 export default function testsuite() {
   movieDemoContractTest();
@@ -171,6 +178,8 @@ export default function testsuite() {
   aggregateSearchA2uiTest();
   multiTaskA2uiTest();
   aggregateSearchClientTest();
+  waterfallRankingReplayTest();
+  waterfallPreferencesStoreTest();
   paymentCoreTest();
   paymentA2uiTest();
   payPalPaymentClientTest();
@@ -226,4 +235,9 @@ export default function testsuite() {
   htmlHomeRendererTest();
   htmlHomeActionPolicyTest();
   capabilityRuntimeTest();
+  publicPersonaTest();
+  dailyBriefCoreTest();
+  dailyBriefStoreTest();
+  dailyBriefGeneratorTest();
+  dailyBriefSchedulerTest();
 }

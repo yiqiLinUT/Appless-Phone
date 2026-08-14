@@ -107,6 +107,364 @@ test('returns from each F16 external authorization page with bounded Back naviga
   assert.doesNotMatch(externalCollection, /aa', 'start', '-a', 'EntryAbility', '-b', 'com\.example\.aiphonedemo/);
 });
 
+test('keeps public-persona smoke separate from default queries and manual-gated', () => {
+  const source = readFileSync('scripts/aiphone-device-smoke.mjs', 'utf8');
+  assert.match(source, /runPublicPersonaSmoke/);
+  assert.match(source, /if \(runPublicPersona\) \{/);
+  assert.match(source, /process\.exit\(summary\.ok \? 0 : 1\)/);
+  assert.match(source, /let p01 = \{ id: 'P01', status: 'BLOCKED', ok: false, manualGate: true/);
+  assert.match(source, /const p02 = \{\s*id: 'P02', status: 'BLOCKED', ok: false, manualGate: true/);
+  assert.match(source, /const p03 = \{\s*id: 'P03', status: 'BLOCKED', ok: false, manualGate: true/);
+  assert.match(source, /const p03 = \{[\s\S]*id: 'P03'[\s\S]*reason: 'no_safe_job_token'/);
+  const publicSmokeStart = source.indexOf('async function runPublicPersonaSmoke');
+  const publicSmokeEnd = source.indexOf('\nconsole.log(`cleanData:', publicSmokeStart);
+  assert.ok(publicSmokeStart >= 0 && publicSmokeEnd > publicSmokeStart, 'public persona smoke body is present');
+  const publicSmoke = source.slice(publicSmokeStart, publicSmokeEnd);
+  const openStart = source.indexOf('async function enterPublicPersonaFromHome');
+  const openEnd = source.indexOf('\nasync function startPublicPersonaDiscoveryOnDevice', openStart);
+  const openBody = source.slice(openStart, openEnd);
+  assert.match(openBody, /opened\.center === null/);
+  assert.match(openBody, /tapPublicPersonaText\('我的画像', 'public-persona-open', 2\)/);
+  assert.match(openBody, /reason: 'public persona entry not found'/);
+  assert.match(openBody, /opened\.center === null[\s\S]*dumpLayout\('public-persona-opened-after-tap\.json'\)/);
+  assert.doesNotMatch(openBody, /const layout = opened\.layout/);
+  const p02Start = publicSmoke.indexOf("const p02 =");
+  const p02Wait = publicSmoke.indexOf('await waitForPublicPersonaManualResume', p02Start);
+  const discoveryStart = publicSmoke.indexOf('const started = await startPublicPersonaDiscoveryOnDevice()');
+  const p02Baseline = publicSmoke.indexOf('p02Baseline = hdc', discoveryStart);
+  const candidateGate = publicSmoke.indexOf('manualCandidateConfirmed', discoveryStart);
+  assert.ok(p02Baseline > discoveryStart && p02Baseline < candidateGate, 'P02 baseline must follow discovery and precede manual confirmation');
+  assert.match(publicSmoke, /clearHilog\(\);[\s\S]*p02Baseline = hdc/);
+  assert.match(publicSmoke, /leaveWhileBusyEvidence/);
+  assert.match(publicSmoke, /taskContinuedEvidence/);
+  assert.match(publicSmoke, /reason: 'no_safe_job_token'/);
+  assert.match(publicSmoke, /jobEvidence: 'unavailable'/);
+  assert.doesNotMatch(publicSmoke, /readingJobId|returnJobId|publicPersonaJobId/);
+  assert.match(publicSmoke, /candidateCardEvidence/);
+  assert.match(publicSmoke, /manualCandidateConfirmed/);
+  assert.doesNotMatch(publicSmoke, /const hasCandidateFields = \/@\\S\+\//);
+  assert.match(publicSmoke, /selectedProfileUrls/);
+  assert.doesNotMatch(publicSmoke, /manual_seed_only/);
+  assert.match(publicSmoke, /knownUnselectedProfileUrls/);
+  assert.match(publicSmoke, /knownUnselectedAbsent/);
+  assert.match(publicSmoke, /selectedSourcesVisible/);
+  assert.match(publicSmoke, /unselectedSourcesAbsent/);
+  assert.match(source, /AIPHONE_PUBLIC_PERSONA_USERNAME/);
+  assert.match(source, /AIPHONE_PUBLIC_PERSONA_SEARCH_MODE/);
+  assert.match(source, /AIPHONE_PUBLIC_PERSONA_SELECTED_URLS/);
+  assert.match(source, /AIPHONE_PUBLIC_PERSONA_UNSELECTED_URLS/);
+  const startDiscoveryStart = source.indexOf('async function startPublicPersonaDiscoveryOnDevice');
+  const startDiscoveryEnd = source.indexOf('\nasync function runPublicPersonaSmoke', startDiscoveryStart);
+  const startDiscoveryBody = source.slice(startDiscoveryStart, startDiscoveryEnd);
+  assert.match(startDiscoveryBody, /uiInput', 'keyEvent', 'Back'[\s\S]*tapPublicPersonaText\('开始查找'/);
+  const tapTextStart = source.indexOf('async function tapPublicPersonaText');
+  const tapTextEnd = source.indexOf('\nasync function waitForPublicPersonaTerminal', tapTextStart);
+  assert.match(source.slice(tapTextStart, tapTextEnd), /try \{[\s\S]*dumpLayout[\s\S]*\} catch \(_error\) \{/);
+  assert.match(publicSmoke, /selectionStepEvidence/);
+  assert.match(publicSmoke, /seedCandidateVisible/);
+  assert.match(source, /function publicPersonaCandidateLayoutState/);
+  assert.match(source, /bounds\.height > 300/);
+  assert.match(source, /value\.indexOf\('·'\) >= 0 && value\.endsWith\(entry\[1\]\)/);
+  assert.match(publicSmoke, /selectionLayoutEvidence/);
+  assert.match(publicSmoke, /expectedSelectedKeys/);
+  assert.match(publicSmoke, /expectedUnselectedKeys/);
+  assert.match(publicSmoke, /selectionSetsMatch/);
+  assert.doesNotMatch(publicSmoke, /knownUnselectedProfileUrls\.every\(/);
+  const deltaStart = source.indexOf('function publicPersonaLogDelta');
+  const deltaEnd = source.indexOf('\nfunction publicPersonaStrictLogDelta', deltaStart);
+  assert.ok(deltaStart >= 0 && deltaEnd > deltaStart, 'strict public-persona log delta helper is present');
+  const deltaBody = source.slice(deltaStart, deltaEnd);
+  assert.match(deltaBody, /baselineMismatch/);
+  assert.doesNotMatch(deltaBody, /return current;/);
+  assert.match(publicSmoke, /const deltaResult = publicPersonaLogDelta/);
+  assert.match(publicSmoke, /baselineMismatch/);
+  assert.match(publicSmoke, /correlationMarker/);
+  assert.match(publicSmoke, /p04Result/);
+  assert.match(publicSmoke, /afterSaveExitLayout/);
+  assert.match(publicSmoke, /saveExitEvidence/);
+  assert.match(publicSmoke, /reenterReloadEvidence/);
+  assert.match(publicSmoke, /savedReloadedText/);
+  assert.match(publicSmoke, /editSaveReload =/);
+  assert.match(publicSmoke, /savedReloadedText/);
+  assert.match(publicSmoke, /p05Result/);
+  assert.match(publicSmoke, /p05PromptBaseline/);
+  assert.match(publicSmoke, /promptDelta/);
+  assert.match(publicSmoke, /requestMarker/);
+  assert.match(publicSmoke, /requestMarkerObserved/);
+  assert.match(publicSmoke, /promptAssemblySafe/);
+  assert.doesNotMatch(publicSmoke, /promptPersonaAbsent = requestMarkerObserved && !personaMarkerObserved/);
+  assert.match(publicSmoke, /cleanup_required/);
+  const finallyStart = publicSmoke.indexOf('} finally {');
+  const finallyBody = publicSmoke.slice(finallyStart);
+  assert.doesNotMatch(finallyBody, /删除画像|确认删除/);
+  assert.match(finallyBody, /force-stop/);
+  assert.match(source, /function publicPersonaSnapshotExists\(\)/);
+  assert.match(source, /aiphone_public_persona/);
+  assert.match(publicSmoke, /const nativeAdmission = publicPersonaExpectedPlatform\.length > 0 &&/);
+  assert.match(publicSmoke, /if \(publicPersonaSnapshotExists\(\) && !nativeAdmission\)/);
+  assert.match(publicSmoke, /enterPublicPersonaFromHome\(nativeAdmission && publicPersonaSnapshotExists\(\)\)/);
+  assert.match(source, /if \(existingSnapshot && input === false\)[\s\S]*重新认识我/);
+  assert.doesNotMatch(publicSmoke, /cleanBundleData\(\)/);
+  assert.match(publicSmoke, /let snapshotCreatedThisRun = false/);
+  assert.match(publicSmoke, /snapshotCreatedThisRun && !snapshotDeleted/);
+  const listed = spawnSync(process.execPath, ['scripts/aiphone-device-smoke.mjs', '--public-persona', '--list-cases'], {
+    encoding: 'utf8'
+  });
+  assert.equal(listed.status, 0, listed.stderr);
+  const manifest = JSON.parse(listed.stdout);
+  assert.deepEqual(manifest.map((item) => item.id), ['P01', 'P02', 'P03', 'P04', 'P05']);
+  assert.equal(manifest.every((item) => item.automated === false && item.manualGate === true), true);
+  assert.equal(manifest.every((item) => item.requires.includes('AIPHONE_PUBLIC_PERSONA_USERNAME')), true);
+  assert.equal(manifest.every((item) => item.requires.some((value) => value.includes('AIPHONE_PUBLIC_PERSONA_SELECTED_URLS'))), true);
+  assert.equal(manifest.every((item) => item.requires.some((value) => value.includes('AIPHONE_PUBLIC_PERSONA_UNSELECTED_URLS'))), true);
+  const gated = spawnSync(process.execPath, ['scripts/aiphone-device-smoke.mjs', '--public-persona'], {
+    encoding: 'utf8',
+    env: { ...process.env, AIPHONE_PUBLIC_PERSONA_USERNAME: '' }
+  });
+  assert.equal(gated.status, 2);
+  assert.match(gated.stderr, /AIPHONE_PUBLIC_PERSONA_USERNAME/);
+  assert.doesNotMatch(gated.stdout, /\[1\/\d+\]/);
+  const disabledPlatform = spawnSync(process.execPath, ['scripts/aiphone-device-smoke.mjs', '--public-persona'], {
+    encoding: 'utf8',
+    env: { ...process.env, AIPHONE_PUBLIC_PERSONA_USERNAME: 'test',
+      AIPHONE_PUBLIC_PERSONA_EXPECTED_PLATFORM: 'x', AIPHONE_PUBLIC_PERSONA_EXPECTED_STATE: 'found' }
+  });
+  assert.equal(disabledPlatform.status, 2);
+  assert.match(disabledPlatform.stderr, /not an enabled public persona source/);
+
+  const indexSource = readFileSync('entry/src/main/ets/pages/A2uiHome/Index.ets', 'utf8');
+  const promptStart = indexSource.indexOf('  private async submitPrompt(');
+  const promptEnd = indexSource.indexOf('\n  private ', promptStart + 1);
+  assert.ok(promptStart >= 0 && promptEnd > promptStart, 'ordinary prompt assembly is present');
+  const promptBody = indexSource.slice(promptStart, promptEnd);
+  assert.doesNotMatch(promptBody, /publicPersonaSnapshot|publicPersonaStore|aiphone_public_persona|snapshot_v1/);
+});
+
+test('keeps a public-persona job alive when its page is reopened', () => {
+  const source = readFileSync('entry/src/main/ets/pages/A2uiHome/Index.ets', 'utf8');
+  assert.match(source, /private publicPersonaInitialized: boolean = false/);
+  const loadStart = source.indexOf('  private loadPublicPersona(');
+  const loadEnd = source.indexOf('\n  private openPublicPersona', loadStart);
+  const openStart = source.indexOf('  private openPublicPersona(');
+  const openEnd = source.indexOf('\n  private skipPublicPersonaOnboarding', openStart);
+  assert.ok(loadStart >= 0 && loadEnd > loadStart);
+  assert.ok(openStart >= 0 && openEnd > openStart);
+  assert.match(source.slice(loadStart, loadEnd), /if \(this\.publicPersonaInitialized\)/);
+  assert.match(source.slice(loadStart, loadEnd), /this\.publicPersonaInitialized = true/);
+  assert.doesNotMatch(source.slice(openStart, openEnd), /loadPublicPersona\(\)/);
+});
+
+test('refreshes the mounted public-persona page after a saved snapshot changes', () => {
+  const index = readFileSync('entry/src/main/ets/pages/A2uiHome/Index.ets', 'utf8');
+  assert.match(index, /@State publicPersonaRenderTick: number = 0/);
+  assert.match(index, /private updatePublicPersonaSnapshot\(snapshot: PublicPersonaSnapshot \| null\): void/);
+  assert.match(index, /this\.publicPersonaSnapshot = snapshot;\s*this\.publicPersonaRenderTick = this\.publicPersonaRenderTick \+ 1/);
+  assert.match(index, /ForEach\(\[this\.publicPersonaRenderTick\][\s\S]{0,300}PublicPersonaPage\(\{/);
+  assert.match(index, /setPublicPersonaMbtiHidden[\s\S]{0,1400}this\.updatePublicPersonaSnapshot\(safe\)/);
+});
+
+test('keeps Markdown drafts open until the parent confirms a successful save', () => {
+  const page = readFileSync('entry/src/main/ets/pages/A2uiHome/components/PublicPersonaPage.ets', 'utf8');
+  assert.match(page, /onSaveMarkdown: \(markdown: string\) => boolean/);
+  assert.match(page, /const saved = this\.onSaveMarkdown\(this\.markdownForEdit\(\)\)/);
+  assert.match(page, /if \(saved\) \{[\s\S]*this\.editingMarkdown = false/);
+  assert.match(page, /parsePublicPersonaMarkdown\(snapshot\.personaMarkdown\)/);
+  assert.match(page, /@State markdownExpanded: boolean = false/);
+  assert.match(page, /if \(!this\.markdownExpanded\) \{[\s\S]*Text\('查看 persona\.md'\)/);
+  assert.match(page, /if \(!this\.markdownExpanded\) \{[\s\S]*\} else \{\s*this\.MarkdownEditor\(snapshot\)/);
+  assert.doesNotMatch(page, /Text\(this\.markdownExpanded \? '收起 persona\.md' : '展开 persona\.md'\)/);
+  assert.match(page, /Text\('persona\.md'\)[\s\S]{0,600}Button\('收起'\)[\s\S]{0,600}Button\(this\.editingMarkdown \? '保存' : '编辑'\)/);
+  assert.doesNotMatch(page, /activePersonaView/);
+  assert.doesNotMatch(page, /Button\('画像'\)/);
+  assert.doesNotMatch(page, /Button\('persona\.md'\)/);
+  assert.match(page, /Text\(inference\.titleName\)/);
+  assert.match(page, /Text\(inference\.oneLineSummary\)/);
+  assert.match(page, /Column\(\) \{\s*this\.MbtiControl\(snapshot\)[\s\S]{0,500}Button\('重新认识我'\)[\s\S]{0,500}\.alignItems\(HorizontalAlign\.Center\)/);
+  assert.match(page, /this\.ProfileSection\('身份与经历', inference\.identityAndExperience\)/);
+  assert.match(page, /GridRow\(\{[\s\S]{0,100}columns: 12,[\s\S]{0,100}gutter: 18,[\s\S]{0,100}breakpoints:/);
+  assert.match(page, /GridCol\(\{ span: \{ xs: 12, sm: 6 \} \}\)/);
+  assert.doesNotMatch(page, /publicPersonaPreviewMarkdown/);
+  assert.doesNotMatch(page, /\.height\(310\)[\s\S]{0,300}publicPersonaPreviewMarkdown/);
+  assert.match(page, /if \(snapshot\.primaryAvatarUrl\.length > 0\)/);
+  assert.match(page, /this\.platformLogo\(snapshot\.sources\[0\]\.platform\)/);
+});
+
+test('requires an explicit manual resume before public-persona destructive gates continue', () => {
+  const source = readFileSync('scripts/aiphone-device-smoke.mjs', 'utf8');
+  const publicSmokeStart = source.indexOf('async function runPublicPersonaSmoke');
+  const publicSmokeEnd = source.indexOf('\nconsole.log(`cleanData:', publicSmokeStart);
+  const publicSmoke = source.slice(publicSmokeStart, publicSmokeEnd);
+  assert.match(source, /AIPHONE_PUBLIC_PERSONA_MANUAL_RESUME/);
+  assert.match(source, /createInterface/);
+  assert.match(publicSmoke, /manualResume/);
+  assert.match(publicSmoke, /if \(manualResume(?: &&|\))/);
+  assert.doesNotMatch(publicSmoke, /const selected = findTextCenter/);
+  assert.doesNotMatch(publicSmoke, /tapPublicPersonaText\('确认并生成画像'/);
+  assert.match(publicSmoke, /publicPersonaSnapshotExists\(\)/);
+  assert.match(source, /tapPublicPersonaText\('重新输入', 'public-persona-retry-input'\)/);
+  assert.match(source, /let opened = await tapPublicPersonaText\('我的画像', 'public-persona-open', 2\)/);
+  assert.match(source, /findHeaderPublicPersonaCenter\(opened\.layout\)/);
+});
+
+test('exposes a dynamic and truthful platform terminal summary in the public persona UI', () => {
+  const client = readFileSync('entry/src/main/ets/publicpersona/PublicPersonaClient.ets', 'utf8');
+  const page = readFileSync('entry/src/main/ets/pages/A2uiHome/components/PublicPersonaPage.ets', 'utf8');
+  assert.match(client, /const probes = catalog\.filter\([\s\S]*publicPersonaProfileUrl\(probe, normalized\) !== null/);
+  assert.match(client, /const total = probes\.length/);
+  assert.match(page, /progress\.completed >= this\.progress\.total/);
+  assert.match(page, /已尝试 ' \+ this\.progress\.total\.toString\(\) \+ ' 个公开平台/);
+  assert.match(page, /明确结果 ' \+ \(this\.progress\.found \+ this\.progress\.notFound\)\.toString\(\)/);
+  assert.match(page, /找到 ' \+[\s\S]*this\.progress\.found\.toString\(\)/);
+  assert.match(page, /未找到 ' \+ this\.progress\.notFound\.toString\(\)/);
+  assert.match(page, /未完成 ' \+ this\.progress\.unknown\.toString\(\)/);
+  assert.match(page, /模糊搜索未完成/);
+  const smoke = readFileSync('scripts/aiphone-device-smoke.mjs', 'utf8');
+  assert.match(smoke, /unknownCount === 0/);
+  assert.match(smoke, /admissionMode && attemptedAll && allSourcesTerminal && expectedStateMatched/);
+  assert.match(smoke, /模糊搜索未完成/);
+  assert.match(smoke, /AIPHONE_PUBLIC_PERSONA_EXPECTED_PLATFORM/);
+  assert.match(smoke, /AIPHONE_PUBLIC_PERSONA_EXPECTED_STATE/);
+  assert.match(smoke, /publicPersonaExpectedHapSha256 !== publicPersonaHapSha256/);
+  assert.match(smoke, /createHash\('sha256'\)\.update\(readFileSync\(publicPersonaHapPath\)\)/);
+  assert.match(smoke, /hdc\(\['install', '-r', publicPersonaHapPath\]\)/);
+  assert.match(smoke, /publicPersonaAdmissionPlatforms/);
+  assert.match(smoke,
+    /'weibo'.*'github'.*'qq'.*'inaturalist'.*'leetcode_cn'.*'gitee'.*'stackoverflow'.*'gitlab'.*'bitbucket'.*'devto'.*'keybase'.*'lemmy'.*'codeberg'.*'codeforces'.*'leetcode'.*'gitea'.*'hackerrank'.*'discogs'/s);
+  assert.doesNotMatch(smoke, /'bilibili'.*publicPersonaAdmissionPlatforms|'x'.*publicPersonaAdmissionPlatforms/);
+  assert.match(smoke, /publicPersonaProbeResultFromLog/);
+  assert.match(smoke, /discoveryLogs = await captureAppLogsFor/);
+  assert.match(smoke, /captureAppLogsFor\(appPid, async \(\) => \{\s*await sleep\(250\);/);
+  assert.match(smoke, /publicPersonaProbeStatesFromLog/);
+  assert.match(smoke, /public-persona-probe-states\.json/);
+  assert.match(smoke, /completed=\(\\d\+\)\\\/\\1/);
+  assert.match(smoke, /public-persona-native-row\.json/);
+  assert.match(smoke, /const candidateRows = candidateLayout === null \? \[\] : publicPersonaCandidateLayoutState\(candidateLayout\);/);
+  assert.match(smoke, /const candidateExists = candidateRows\.length > 0 &&/);
+  assert.doesNotMatch(smoke, /candidatePlatformVisible|candidateUsernameVisible/);
+  assert.match(smoke, /row\.key === `\$\{publicPersonaExpectedPlatform\}:\$\{seedHandle\.toLowerCase\(\)\}`/);
+  const index = readFileSync('entry/src/main/ets/pages/A2uiHome/Index.ets', 'utf8');
+  assert.match(index, /\[AIPhone\]\[PublicPersonaProbe\] platform=\$\{progress\.platform\} result=\$\{probeResult\}/);
+});
+
+test('starts public-persona discovery from a username with exact and fuzzy modes', () => {
+  const page = readFileSync('entry/src/main/ets/pages/A2uiHome/components/PublicPersonaPage.ets', 'utf8');
+  const index = readFileSync('entry/src/main/ets/pages/A2uiHome/Index.ets', 'utf8');
+  assert.match(page, /@State username: string = ''/);
+  assert.match(page, /@State searchMode: PublicPersonaSearchMode = 'fuzzy'/);
+  assert.match(page, /Button\('精确'\)/);
+  assert.match(page, /Button\('模糊'\)/);
+  assert.match(page, /onStartDiscovery\(this\.username\.trim\(\), this\.searchMode\)/);
+  assert.match(index, /discover\(username, mode,/);
+});
+
+test('keeps the public persona entry visible without a remote avatar', () => {
+  const page = readFileSync('entry/src/main/ets/pages/A2uiHome/components/HomePage.ets', 'utf8');
+  const socialStart = page.indexOf("symbol: $r('sys.symbol.person')");
+  const socialEnd = page.indexOf(".margin({ left: A2UI_HEADER_BUTTON_GAP })", socialStart);
+  assert.ok(socialStart >= 0 && socialEnd > socialStart, 'former social slot is present');
+  const socialBlock = page.slice(page.lastIndexOf('A2uiButtonView({', socialStart), socialEnd);
+  assert.match(socialBlock, /symbol: \$r\('sys\.symbol\.person'\)/);
+  assert.match(socialBlock, /hasSymbol: true/);
+  assert.match(socialBlock, /onOpenPublicPersona/);
+  assert.doesNotMatch(socialBlock, /👤|icon_social|onOpenSocialHub/);
+  assert.doesNotMatch(page, /persona_avatar_default/);
+  assert.match(socialBlock, /accessibilityText\('我的画像'/);
+});
+
+test('builds the HAP from an explicit local provider env without committing secrets', () => {
+  const sync = readFileSync('scripts/sync-provider-config.mjs', 'utf8');
+  const hvigor = readFileSync('entry/hvigorfile.ts', 'utf8');
+  assert.match(sync, /AIPHONE_PROVIDER_ENV_PATH/);
+  assert.match(hvigor, /AIPHONE_PROVIDER_ENV_PATH/);
+  assert.match(hvigor, /Skipping local provider config sync/);
+});
+
+test('surfaces provider authorization failures instead of calling them empty results', () => {
+  const page = readFileSync('entry/src/main/ets/pages/A2uiHome/components/PublicPersonaPage.ets', 'utf8');
+  assert.match(page, /needs_auth/);
+  assert.match(page, /blocked_by_site/);
+});
+
+test('invalidates in-flight MBTI reinference on local markdown and visibility changes', () => {
+  const source = readFileSync('entry/src/main/ets/pages/A2uiHome/Index.ets', 'utf8');
+  const saveStart = source.indexOf('  private savePublicPersonaMarkdown(');
+  const saveEnd = source.indexOf('\n  private async runPublicPersonaReinference', saveStart);
+  const hideStart = source.indexOf('  private setPublicPersonaMbtiHidden(');
+  const hideEnd = source.indexOf('\n  private deletePublicPersona', hideStart);
+  assert.ok(saveStart >= 0 && saveEnd > saveStart, 'markdown save method is present');
+  assert.ok(hideStart >= 0 && hideEnd > hideStart, 'MBTI visibility method is present');
+  const saveSource = source.slice(saveStart, saveEnd);
+  const hideSource = source.slice(hideStart, hideEnd);
+  assert.match(saveSource, /this\.publicPersonaJobId\+\+/);
+  assert.match(saveSource, /parsePublicPersonaMarkdown\(markdown\) === null/);
+  assert.match(hideSource, /this\.publicPersonaJobId\+\+/);
+  assert.match(saveSource, /this\.publicPersonaJobId\+\+[\s\S]*store\.save/);
+  assert.match(hideSource, /this\.publicPersonaJobId\+\+[\s\S]*store\.save/);
+  assert.match(source, /if \(jobId !== this\.publicPersonaJobId \|\| this\.publicPersonaSnapshot === null\)/);
+});
+
+test('dismisses the keyboard only before direct daily-brief scrolled evidence', () => {
+  assert.equal(typeof smokeLifecycle.shouldDismissKeyboardBeforeScrolledEvidence, 'function');
+  assert.equal(smokeLifecycle.shouldDismissKeyboardBeforeScrolledEvidence('daily.brief.open'), true);
+  [
+    '',
+    'calendar.event.list',
+    'mail.search',
+    'media.aggregate.search',
+    'movie.open'
+  ].forEach((expectedToolId) => {
+    assert.equal(smokeLifecycle.shouldDismissKeyboardBeforeScrolledEvidence(expectedToolId), false);
+  });
+
+  const source = readFileSync('scripts/aiphone-device-smoke.mjs', 'utf8');
+  const callSite = source.slice(
+    source.indexOf('const expectedMarkers = layoutExpectationsForQuery(query);'),
+    source.indexOf('const evidenceText = scrollEvidence.text;')
+  );
+  const dismiss = callSite.indexOf('shouldDismissKeyboardBeforeScrolledEvidence(expectedToolId)');
+  const back = callSite.indexOf("keyEvent', 'Back'");
+  const collect = callSite.indexOf('collectScrolledLayoutEvidence(');
+  assert.ok(dismiss >= 0 && back > dismiss && collect > back);
+});
+
+test('gives only direct daily-brief evidence a bounded twenty-scroll window', () => {
+  assert.equal(typeof smokeLifecycle.scrolledEvidenceAttemptLimit, 'function');
+  assert.equal(smokeLifecycle.scrolledEvidenceAttemptLimit('daily.brief.open'), 20);
+  ['', 'calendar.event.list', 'mail.search', 'media.aggregate.search', 'movie.open']
+    .forEach((expectedToolId) => {
+      assert.equal(smokeLifecycle.scrolledEvidenceAttemptLimit(expectedToolId), 5);
+    });
+
+  const source = readFileSync('scripts/aiphone-device-smoke.mjs', 'utf8');
+  const collectSource = source.slice(
+    source.indexOf('async function collectScrolledLayoutEvidence'),
+    source.indexOf('function expandMatchesForTarget')
+  );
+  assert.match(collectSource, /attemptLimit/);
+  assert.match(collectSource, /attempt < attemptLimit/);
+  const callSite = source.slice(
+    source.indexOf('const expectedMarkers = layoutExpectationsForQuery(query);'),
+    source.indexOf('const evidenceText = scrollEvidence.text;')
+  );
+  assert.match(callSite, /scrolledEvidenceAttemptLimit\(expectedToolId\)/);
+});
+
+test('keeps direct daily-brief routing independent from removed BIM suggestion state', () => {
+  const source = readFileSync('entry/src/main/ets/pages/A2uiHome/Index.ets', 'utf8');
+  const start = source.indexOf('const directDailyBriefRequest = resolveA2uiHomeSubmitToolRequest(trimmed);');
+  const end = source.indexOf('const modelPrompt = modelPromptWithActionContext', start);
+  assert.ok(start >= 0 && end > start, 'direct daily-brief submit branch is present');
+  assert.doesNotMatch(source.slice(start, end), /clearBimSuggestion/);
+});
+
+test('keeps packaged Didi production mode on app startup', () => {
+  const source = readFileSync('entry/src/main/ets/pages/A2uiHome/Index.ets', 'utf8');
+  const start = source.indexOf('aboutToAppear(): void {');
+  const end = source.indexOf('onPageShow(): void {', start);
+  assert.ok(start >= 0 && end > start);
+  assert.doesNotMatch(source.slice(start, end), /configureDidiMcpSandboxRuntime\(true\)/);
+});
+
 test('holds ordinary C20 multi-agent capture until its bounded settlement window', () => {
   assert.equal(typeof smokeLifecycle.multiAgentPostCompletionWaitMs, 'function');
   assert.equal(typeof smokeLifecycle.captureCompletionSettled, 'function');
@@ -1900,10 +2258,191 @@ test('requires a virtual action request before its exact result', () => {
   }).complete, false);
 });
 
-test('lists exactly C01-C23 and F01-F16 without excluded sends', () => {
+test('requires exact direct daily-brief system-intent, HTML, visible, and no-click evidence', () => {
+  assert.equal(typeof smokeLifecycle.dailyBriefDirectEvidence, 'function');
+  if (typeof smokeLifecycle.dailyBriefDirectEvidence !== 'function') {
+    return;
+  }
+  const contentDigest = 'a'.repeat(64);
+  const logs = [
+    '[AIPhone][A2uiHomeToolRequest] toolId=daily.brief.open promptChars=7 actionId=daily.brief.open gateway=local://aiphone-tools',
+    '[AIPhone][A2uiHomeSurfaceForceUpdate] reason=daily_brief_open_existing surfaceId=daily-brief-2026-08-11 status=ready components=1 dataChars=2048 sequence=1 renderTick=3',
+    `[AIPhone][HtmlHomeDocument] source=tool kind=daily-brief chars=16384 blocks=0 contentDigest=${contentDigest} renderTick=3`,
+    `[AIPhone][HtmlHomeSurfaceLoad] chars=16384 contentDigest=${contentDigest} renderTick=3 busy=false`
+  ].join('\n');
+  const visible = [
+    '个人日报', '实际生成', 'Top 3', '今日状态', '穿衣与出行', '为你发现', '基于你的偏好',
+    '前一天', 'Calendar needs_auth', 'Mail timeout', 'Waterfall error'
+  ].join('\n');
+  const evidence = smokeLifecycle.dailyBriefDirectEvidence(logs, visible);
+  assert.equal(evidence.complete, true);
+  assert.equal(evidence.uiOk, true);
+  assert.equal(evidence.ok, true);
+  assert.deepEqual(evidence.derivedActionIds, []);
+
+  const oneBehindLoad = logs.replace(
+    `contentDigest=${contentDigest} renderTick=3 busy=false`,
+    `contentDigest=${contentDigest} renderTick=2 busy=false`
+  );
+  const oneBehindEvidence = smokeLifecycle.dailyBriefDirectEvidence(oneBehindLoad, visible);
+  assert.equal(oneBehindEvidence.complete, true);
+  assert.equal(oneBehindEvidence.executionObserved, true);
+  assert.equal(oneBehindEvidence.ok, true);
+
+  const mismatchedChars = logs.replace(
+    '[AIPhone][HtmlHomeSurfaceLoad] chars=16384',
+    '[AIPhone][HtmlHomeSurfaceLoad] chars=16383'
+  );
+  assert.equal(smokeLifecycle.dailyBriefDirectEvidence(mismatchedChars, visible).ok, false);
+
+  const mismatchedDigest = logs.replace(
+    `[AIPhone][HtmlHomeSurfaceLoad] chars=16384 contentDigest=${contentDigest}`,
+    `[AIPhone][HtmlHomeSurfaceLoad] chars=16384 contentDigest=${'b'.repeat(64)}`
+  );
+  assert.equal(smokeLifecycle.dailyBriefDirectEvidence(mismatchedDigest, visible).ok, false);
+
+  const missingDocumentDigest = logs.replace(` contentDigest=${contentDigest} renderTick=3`, ' renderTick=3');
+  assert.equal(smokeLifecycle.dailyBriefDirectEvidence(missingDocumentDigest, visible).ok, false);
+
+  const missingLoadDigest = logs.replace(` contentDigest=${contentDigest} renderTick=3 busy=false`,
+    ' renderTick=3 busy=false');
+  assert.equal(smokeLifecycle.dailyBriefDirectEvidence(missingLoadDigest, visible).ok, false);
+
+  const loadTooFarBehind = logs.replace(
+    `contentDigest=${contentDigest} renderTick=3 busy=false`,
+    `contentDigest=${contentDigest} renderTick=1 busy=false`
+  );
+  assert.equal(smokeLifecycle.dailyBriefDirectEvidence(loadTooFarBehind, visible).ok, false);
+
+  const staleDailyThenCurrentMovie = [
+    logs,
+    '[AIPhone][A2uiHomeToolRequest] toolId=movie.open promptChars=4 actionId=movie.open gateway=local://aiphone-tools'
+  ].join('\n');
+  assert.equal(smokeLifecycle.dailyBriefDirectEvidence(staleDailyThenCurrentMovie, visible).ok, false);
+
+  const staleDailyThenCurrentDaily = [
+    logs,
+    '[AIPhone][A2uiHomeToolRequest] toolId=daily.brief.open promptChars=7 actionId=daily.brief.open gateway=local://aiphone-tools'
+  ].join('\n');
+  assert.equal(smokeLifecycle.dailyBriefDirectEvidence(staleDailyThenCurrentDaily, visible).ok, false);
+
+  const mixedRenderTicks = logs
+    .replace(`contentDigest=${contentDigest} renderTick=3`, `contentDigest=${contentDigest} renderTick=4`)
+    .replace(`contentDigest=${contentDigest} renderTick=3 busy=false`,
+      `contentDigest=${contentDigest} renderTick=5 busy=false`);
+  const mixedEvidence = smokeLifecycle.dailyBriefDirectEvidence(mixedRenderTicks, visible);
+  assert.equal(mixedEvidence.complete, false);
+  assert.equal(mixedEvidence.ok, false);
+  assert.equal(mixedEvidence.executionObserved, false);
+
+  const missingSurfaceTick = smokeLifecycle.dailyBriefDirectEvidence(
+    logs.replace(' sequence=1 renderTick=3', ' sequence=1'), visible);
+  assert.equal(missingSurfaceTick.complete, false);
+  assert.equal(missingSurfaceTick.ok, false);
+  assert.equal(missingSurfaceTick.executionObserved, false);
+
+  const missingDocumentTick = smokeLifecycle.dailyBriefDirectEvidence(
+    logs.replace(` contentDigest=${contentDigest} renderTick=3`, ` contentDigest=${contentDigest}`), visible);
+  assert.equal(missingDocumentTick.complete, false);
+  assert.equal(missingDocumentTick.ok, false);
+  assert.equal(missingDocumentTick.executionObserved, false);
+
+  const missingLoadTick = smokeLifecycle.dailyBriefDirectEvidence(
+    logs.replace(` contentDigest=${contentDigest} renderTick=3 busy=false`,
+      ` contentDigest=${contentDigest} busy=false`), visible);
+  assert.equal(missingLoadTick.complete, false);
+  assert.equal(missingLoadTick.ok, false);
+  assert.equal(missingLoadTick.executionObserved, false);
+
+  const invalidLogs = [
+    logs.replace('[A2uiHomeToolRequest]', '[A2uiHomeToolRequestFromModel]'),
+    logs.replace('toolId=daily.brief.open', 'toolId=movie.open'),
+    logs.replace('reason=daily_brief_open_existing', 'reason=daily_brief_generate_first'),
+    logs.replace('kind=daily-brief', 'kind=generic'),
+    logs.replace('chars=16384', 'chars=0'),
+    logs.replace('[AIPhone][HtmlHomeSurfaceLoad]', '[AIPhone][HtmlHomeSurfaceLoadError]'),
+    logs + '\n[AIPhone][A2uiHomeClientAction] id=daily.brief.regenerate'
+  ];
+  invalidLogs.forEach((candidate) => {
+    assert.equal(smokeLifecycle.dailyBriefDirectEvidence(candidate, visible).ok, false);
+  });
+  assert.equal(smokeLifecycle.dailyBriefDirectEvidence(
+    logs,
+    visible.replace('前一天', '')
+  ).ok, false);
+});
+
+test('allows visible daily-brief dates without weakening ordinary date leak checks', () => {
+  assert.equal(typeof smokeLifecycle.finalVisibleDateBlockingHits, 'function');
+  if (typeof smokeLifecycle.finalVisibleDateBlockingHits !== 'function') {
+    return;
+  }
+  const visible = '个人日报\n2026-08-11\n实际生成 · 2026-08-11T01:14:47.957Z\n2026年8月11日';
+  assert.deepEqual(smokeLifecycle.finalVisibleDateBlockingHits(
+    visible, 'daily.brief.open', '2026-08-11'), []);
+  assert.deepEqual(smokeLifecycle.finalVisibleDateBlockingHits(
+    visible.replace('\n2026-08-11\n', '\n2026-08-10\n'), 'daily.brief.open', '2026-08-11'), [
+    'daily-brief-date'
+  ]);
+  assert.deepEqual(smokeLifecycle.finalVisibleDateBlockingHits(
+    visible, 'daily.brief.open'), ['daily-brief-date']);
+  assert.deepEqual(smokeLifecycle.finalVisibleDateBlockingHits(
+    '个人日报\n截至 2026-08-11 的摘要', 'daily.brief.open', '2026-08-11'), [
+    'daily-brief-date'
+  ]);
+  assert.deepEqual(smokeLifecycle.finalVisibleDateBlockingHits(visible, 'movie.open'), [
+    'iso-date',
+    'zh-date'
+  ]);
+});
+
+test('keeps direct daily-brief analysis independent from model tool and provider evidence', () => {
+  assert.equal(typeof smokeLifecycle.dailyBriefDirectAnalysis, 'function');
+  if (typeof smokeLifecycle.dailyBriefDirectAnalysis !== 'function') {
+    return;
+  }
+  const multiAgentLifecycle = { complete: false, ok: false, toolIds: [] };
+  const analyzed = smokeLifecycle.dailyBriefDirectAnalysis({
+    multiAgentLifecycle,
+    modelPassed: false,
+    modelFailed: true,
+    modelSelectedExpectedToolId: true,
+    hasExpectedToolId: false,
+    toolRequested: false,
+    toolOk: false,
+    toolExecutionObserved: false,
+    providerFailed: true,
+    transportPassed: false,
+    htmlLoadError: false,
+    syntheticFallback: false,
+    basePassedWithoutTransport: false,
+    ok: false
+  }, {
+    complete: true,
+    requestObserved: true,
+    executionObserved: true
+  });
+  assert.equal(analyzed.modelApplicable, false);
+  assert.equal(analyzed.multiAgentLifecycle, multiAgentLifecycle);
+  assert.equal(analyzed.modelPassed, false);
+  assert.equal(analyzed.modelFailed, true);
+  assert.equal(analyzed.modelSelectedExpectedToolId, false);
+  assert.equal(analyzed.hasExpectedToolId, false);
+  assert.equal(analyzed.toolRequested, false);
+  assert.equal(analyzed.toolOk, false);
+  assert.equal(analyzed.toolExecutionObserved, false);
+  assert.equal(analyzed.providerFailed, true);
+  assert.equal(analyzed.transportPassed, false);
+  assert.equal(analyzed.dailyBriefRequestObserved, true);
+  assert.equal(analyzed.dailyBriefExecutionObserved, true);
+  assert.equal(analyzed.basePassedWithoutTransport, true);
+  assert.equal(analyzed.ok, true);
+});
+
+test('lists exactly C01-C24 and F01-F16 without excluded sends', () => {
   const core = listedCases();
   assert.deepEqual(core.map((item) => item.id),
-    Array.from({ length: 23 }, (_value, index) => `C${String(index + 1).padStart(2, '0')}`));
+    Array.from({ length: 24 }, (_value, index) => `C${String(index + 1).padStart(2, '0')}`));
   const full = listedCases(['--full-regression']);
   assert.deepEqual(full.map((item) => item.id), [
     ...core.map((item) => item.id),
@@ -1926,7 +2465,29 @@ test('lists exactly C01-C23 and F01-F16 without excluded sends', () => {
     ['time', 'ride.estimate']);
   assert.deepEqual(full.find((item) => item.id === 'C22')?.expectedToolIds,
     ['ride.estimate', 'luckin.order.preview', 'payment.send']);
+  assert.deepEqual(full.find((item) => item.id === 'C24'), {
+    id: 'C24',
+    expectedToolIds: ['daily.brief.open'],
+    requiredVisibleMarkers: [
+      '个人日报', '实际生成', 'Top 3', '今日状态', '穿衣与出行', '为你发现', '基于你的偏好', '前一天'
+    ],
+    automatedDerivedActionIds: [],
+    manualDerivedActionIds: [
+      'daily.brief.regenerate',
+      'daily.brief.preference.save',
+      'daily.brief.history.open',
+      'daily.brief.mail.read',
+      'daily.brief.discovery.open'
+    ]
+  });
   assert.doesNotMatch(serialized, /不确认直接发送|gmail\.message\.send/);
+});
+
+test('infers positional daily-brief queries without routing generic reports', () => {
+  const [daily] = listedCases(['打开个人日报']);
+  assert.deepEqual(daily.expectedToolIds, ['daily.brief.open']);
+  const [generic] = listedCases(['帮我整理一份行业日报']);
+  assert.deepEqual(generic.expectedToolIds, []);
 });
 
 test('maps the positional Gmail confirmation query to the retained F08 apply action', () => {
