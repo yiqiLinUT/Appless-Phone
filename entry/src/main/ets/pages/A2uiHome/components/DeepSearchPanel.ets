@@ -164,6 +164,9 @@ export struct DeepSearchPanel {
     const engine = new DeepSearchEngine(deepSearchPortsOf(settings));
     this.engine = engine;
     engine.run(trimmed, (progress: DeepSearchProgress): void => {
+      if (this.engine !== engine) {
+        return;
+      }
       const wasRunning = this.running;
       this.stages = progress.stages;
       this.sources = progress.sources;
@@ -189,6 +192,9 @@ export struct DeepSearchPanel {
         }
       }
     }, context).catch((error: Error) => {
+      if (this.engine !== engine) {
+        return;
+      }
       const message = error.message !== undefined && error.message.length > 0 ?
         error.message : JSON.stringify(error);
       this.errorText = message;

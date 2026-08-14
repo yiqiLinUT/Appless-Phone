@@ -4437,8 +4437,8 @@ struct Index {
       let locationLabel = '';
       try {
         const request: geoLocationManager.ReverseGeoCodeRequest = {
-          latitude: Number.parseFloat(coordinate.split(',')[0]),
-          longitude: Number.parseFloat(coordinate.split(',')[1]),
+          latitude: Number.parseFloat(coordinate.split(',')[1]),
+          longitude: Number.parseFloat(coordinate.split(',')[0]),
           maxItems: 1
         };
         const addresses = await geoLocationManager.getAddressesFromLocation(request);
@@ -4561,7 +4561,9 @@ struct Index {
     if (trimmed.length === 0 || this.isBusy) {
       return;
     }
-    const autoDeep = sourceBimId.length === 0 && shouldAutoRouteDeepSearch(trimmed, actionId);
+    const directDailyBriefRequest = resolveA2uiHomeSubmitToolRequest(trimmed);
+    const autoDeep = directDailyBriefRequest === null &&
+      sourceBimId.length === 0 && shouldAutoRouteDeepSearch(trimmed, actionId);
     if (autoDeep && trimmed.length > 0) {
       this.inputText = inputTextAfterPromptSubmit(this.inputText);
       this.appendMessage('user', visibleText);
@@ -4575,7 +4577,6 @@ struct Index {
     if (this.showDeepSearch) {
       this.closeDeepSearch();
     }
-    const directDailyBriefRequest = resolveA2uiHomeSubmitToolRequest(trimmed);
     if (directDailyBriefRequest !== null) {
       this.inputPlaceholder = DEFAULT_INPUT_PLACEHOLDER;
       this.appendMessage('user', visibleText);
