@@ -75,6 +75,7 @@ import voiceInputBridgeTest from './VoiceInputBridge.test';
 import personaStoreTest from './PersonaStore.test';
 import personaA2uiTest from './PersonaA2ui.test';
 import personaMemoryUpdateTest from './PersonaMemoryUpdate.test';
+import deepSearchEngineTest from './DeepSearchEngine.test';
 import personaMarkdownTest from './PersonaMarkdown.test';
 import skillMarkdownParserTest from './SkillMarkdownParser.test';
 import modelScopeDirectClientTest from './ModelScopeDirectClient.test';
@@ -220,6 +221,7 @@ export default function testsuite() {
   personaStoreTest();
   personaA2uiTest();
   personaMemoryUpdateTest();
+  deepSearchEngineTest();
   htmlHomeSnapshotTest();
   htmlHomeRendererTest();
   htmlHomeActionPolicyTest();
