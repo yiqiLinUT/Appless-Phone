@@ -1007,9 +1007,22 @@ class CanaryStructuredDataExecutor implements DataTaskExecutor {
       if (queryText.length === 0) {
         throw new Error('DEEP_SEARCH_QUERY_MISSING');
       }
-      if (this.onDeepSearch !== null) {
-        this.onDeepSearch(queryText);
+      if (this.onDeepSearch === null) {
+        return {
+          toolId: 'deep.search',
+          outputSchema: 'genericToolResults',
+          status: 'error',
+          sources: [],
+          data: new Object(),
+          warnings: [],
+          error: {
+            code: 'DEEP_SEARCH_HOST_UNAVAILABLE',
+            message: 'DeepSearch panel host is unavailable in this runtime.',
+            retryable: false
+          }
+        };
       }
+      this.onDeepSearch(queryText);
       const result: DynamicGenericToolResult = {
         sourceTag: 'DeepSearch',
         toolName: 'deep.search',
@@ -1555,14 +1568,16 @@ interface MemorySurfaceOutput {
 function canaryPlanningContext(
   previousPersonaId: string,
   _prompt: string = '',
-  allowTrustedOperationTargets: boolean = false
+  allowTrustedOperationTargets: boolean = false,
+  allowDeepSearch: boolean = false
 ): LeaderPlanningContext {
   const tools: LeaderToolMetadata[] = allToolDefinitions()
     .filter((definition: ToolDefinition): boolean =>
       definition.toolId !== 'gmail.message.send' &&
         definition.toolId !== 'social.reply.draft' &&
         definition.toolId !== 'hotel.navigate' &&
-        definition.toolId !== 'hotel.booking.open'
+        definition.toolId !== 'hotel.booking.open' &&
+        (allowDeepSearch || definition.toolId !== 'deep.search')
     )
     .map(
     (definition: ToolDefinition): LeaderToolMetadata => {
@@ -1774,8 +1789,9 @@ export class MultiAgentCanaryRuntime {
     );
     this.aiphoneExecutor = aiphoneExecutor;
     const allowTrustedOperationTargets = options.allowTrustedOperationTargets === true;
+    const allowDeepSearch = options.onDeepSearch !== undefined;
     const initialContext = canaryPlanningContext(
-      this.lastLeaderPersonaId, '', allowTrustedOperationTargets
+      this.lastLeaderPersonaId, '', allowTrustedOperationTargets, allowDeepSearch
     );
     const dataTaskInputNormalizer: LeaderDataTaskInputNormalizer = (
       input: InputUserPayload,
@@ -1793,7 +1809,9 @@ export class MultiAgentCanaryRuntime {
       planner: leaderPlanner,
       planningContext: initialContext,
       planningContextProvider: (prompt: string): LeaderPlanningContext =>
-        canaryPlanningContext(this.lastLeaderPersonaId, prompt, allowTrustedOperationTargets),
+        canaryPlanningContext(
+          this.lastLeaderPersonaId, prompt, allowTrustedOperationTargets, allowDeepSearch
+        ),
       currentLocalDateProvider: options.currentLocalDate,
       dataTaskInputNormalizer,
       dataAuthorizer: authorizeCanaryDataTask,

@@ -4703,7 +4703,14 @@ struct Index {
   }
 
   private async openDeepSearchForQuery(query: string): Promise<void> {
+    const generation = this.runtimeGeneration;
+    const owner = this.activeRuntimeOwner;
     const contextJson = await this.buildDeepSearchContext();
+    if (!runtimeCallbackIsCurrent(
+      this.activeRuntimeOwner, this.runtimeGeneration, owner, generation
+    )) {
+      return;
+    }
     this.openDeepSearch(query, contextJson);
   }
 
